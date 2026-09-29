@@ -1,6 +1,6 @@
 # AI Social Operator V1 — Active Implementation Plan
 
-- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3 与 Phase 3.5 已完成；等待用户确认后再进入 Phase 4
+- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5 与 Phase 3.5.1 实现已完成；真实 Chrome 扩展及账号采集仍待用户本机验收；等待用户确认后再进入 Phase 4
 - 更新日期：2026-09-29
 - 源码基线：Easel `main` at `0cab7ca6f6e8286635d25fe2435dda11a975ffec`
 - 本计划依据：`../../AGENTS.md`、`../product-specs/AI_SOCIAL_OPERATOR_V1.md`、`PLANS.md`、`../audits/EASEL_V1_SOURCE_AUDIT.md` 及当前仓库源码
@@ -113,7 +113,8 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 | 1 | 1 双账号基础模型 | Account、Profile/Strategy 关联、状态与隔离 | 使用 `easel/social_operator/` 业务服务、独立数据仓库、V1 API router；不复用登录账户模型 |
 | 2 | 2 历史数据导入 | 手工/CSV/XLSX 历史内容、校验和完整度 | 复用 `python-multipart`、上传/Outputs 与 pandas；新增 HistoricalPost 存储/API/UI；平台抓取不得成为前置依赖 |
 | 3 | 3 Intelligence Engine / Initial Diagnosis | 逐帖/分组分析和可追溯诊断报告 | 复用 `skills/shared/scripts/social_stats.py` 与 `skill-account-diagnosis` 框架；结构化样本、来源与置信度由业务服务提供 |
-| 3.5 | 3.5 Douyin Historical Data Acquisition | 官方 OpenAPI / 创作者中心辅助同步，统一预览确认和增量写入 | 增加来源 Adapter；复用 Phase 2 `HistoricalImportService`，Phase 3 引擎只消费 HistoricalPost；最小 Chrome MV3 DOM helper；OpenAPI 无权限时显示未配置 |
+| 3.5 | 3.5 Douyin Historical Data Acquisition | Creator Center 为默认主入口；统一预览确认和增量写入 | 增加来源 Adapter；复用 Phase 2 `HistoricalImportService`，Phase 3 引擎只消费 HistoricalPost；Chrome MV3 DOM helper；OpenAPI 为高级选项 |
+| 3.5.1 | 3.5.1 Douyin Creator Center Sync UX Fix | 无历史作品诊断引导、同步向导、扩展握手和状态反馈 | 复用既有同步适配器/session/preview/confirm，不重做采集器 |
 | 4 | 4 Account Baseline | 账号级历史中位数/分组基线 | 复用 `social_stats.py`；存储 sampleSize、日期范围和快照版本 |
 | 5 | 5 Strategy Recommendation | 双账号独立定位、支柱、比例、实验建议 | 复用 `skill-strategy-advisor`/`skill-content-strategy` 的方法；定位仍为建议，不自动激活 |
 | 6 | 6 Strategy Confirmation | 修改、确认/退回、激活 Strategy | 独立策略版本、确认人/时间和服务端状态转换；未确认不 ACTIVE |
@@ -251,3 +252,26 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 - `npm run build`（含 `tsc -b`）通过；`npm run lint` 通过并保留两条既有 warning；`git diff --check` 通过。未新增依赖；Phase 2 CSV/XLSX、手工 CRUD、Phase 3 Diagnosis 和旧 `/api/accounts` 回归均通过。
 - Phase 3.5 后续用户可在未配置 OpenAPI 时使用 Chrome Creator Center 辅助同步，也可继续 CSV/XLSX/手工录入；Phase 3 Diagnosis 可读取其确认写入的 `HistoricalPost`。数据模型与服务前置已具备进入 Phase 4 的条件；真实账号 DOM 适配仍需用户在首次使用时确认页面扫描可读。
 - 本 Phase 已结束。本记录不授权进入 Phase 4；需用户单独确认。
+
+## 12. Phase 3.5.1 执行记录：Douyin Creator Center Sync UX Fix
+
+### 启动检查点与边界
+
+- 按要求将 Phase 3.5 当前实现单独提交为 `cdbe386`（`Checkpoint social operator Phase 3.5 douyin historical sync`）；提交前 `git diff --check` 通过。
+- 本轮修正 Phase 3.5.1 产品入口和流程联动；没有实现 Account Baseline、Strategy Recommendation 或 Phase 4。
+
+### 实际实现
+
+- Douyin 历史页的主按钮明确为 Creator Center Assisted Sync；CSV/XLSX 和手工添加位于“其他导入方式”；OpenAPI 配置状态/申请入口放入高级折叠项，不是同步前置条件。
+- 首次诊断页面先展示作品数。0 条时诊断按钮不显示，明确写出“首次账号诊断需要历史作品数据”，主 CTA 直接进入同步向导；CSV/XLSX 和手工添加仍可打开历史页。导入确认后显示已同步数量和“开始首次账号诊断”，不自动运行。
+- 同步向导说明扩展安装路径和 Chrome 加载未打包扩展步骤，生成并展示短时会话码；可打开抖音创作者中心作品管理新标签页，并明确让用户本人扫码/登录。
+- Chrome 扩展主动 POST account-scoped 状态：扩展连接、标签页缺失、未登录、不支持页面、可扫描、扫描中、扫描完成或失败。网页每 1.8 秒读取短时会话状态。CORS 只为合法 Chrome Extension Origin 放行这一同步会话的 `preview`/`extension-state` POST。
+- 扩展扫描当前作品管理页可见 DOM，辅助滚动，最多尝试 10 页明确标记的下一页控件；平台未提供可识别分页时提示用户手动翻页后再次扫描。页面缺失字段仍为 `null`，绝不填入 0。最终复用 Phase 2 preview 与 confirm，不在扫描时写入帖子表。
+- 产品文档已将 Creator Center Assisted Sync 定为默认方式，OpenAPI 设为次要高级选项；更新 PLANS、执行记录、Chrome 扩展 README 和 CHANGELOG。
+
+### 验收记录与限制
+
+- 真实本地服务 `http://127.0.0.1:7860` 和真实前端已启动。使用浏览器实际打开账号页，确认抖音历史为 0 条；点击“首次账号诊断”，实际显示无历史引导；点击同步 CTA 后显示安装/握手向导；点击“打开抖音创作者中心”实际新开 `https://creator.douyin.com/creator-micro/content/manage` 标签页。
+- 因当前测试浏览器未安装本地扩展、无用户抖音登录态，扩展握手 UI 状态通过真实运行服务的同步会话 API 发出 `not_logged_in` 事件进行走查，确认 Easel 自动显示“等待你在网页中自行登录”。这验证了 UI 与后端会话状态联动，但不等价于验证扩展已在 Chrome 安装运行或抖音页面 DOM 与真实账号匹配。
+- 真实抖音登录、作品扫描、DOM 字段识别、扫描预览与确认写库需用户在本机按 README 进行最终验收；没有要求在此使用真实账号。
+- 最终全量 Python Test：`359 passed, 6 skipped`；扩展 DOM Node Test：`2 passed`；扩展 JS 语法及 manifest JSON 校验通过。`npm run build`（含 TypeScript）通过；`npm run lint` 通过，仍报告两条既有 warning（`linkifyOutputs.ts` 的无用转义、`AccountsPage.tsx` 的 `openCred` hook 依赖）；`git diff --check` 通过。无新增依赖。

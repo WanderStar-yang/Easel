@@ -25,8 +25,8 @@ function ConfidenceBadge({ confidence }: { confidence: string }) {
   return <span className={`badge ${confidence === 'HIGH' ? 'badge-ok' : ''}`}>{label}置信度</span>;
 }
 
-export default function AccountDiagnosisPanel({ account, onClose }: {
-  account: OperatorAccount; onClose: () => void;
+export default function AccountDiagnosisPanel({ account, onClose, onOpenHistory, onOpenCreatorSync }: {
+  account: OperatorAccount; onClose: () => void; onOpenHistory: () => void; onOpenCreatorSync: () => void;
 }) {
   const [postCount, setPostCount] = useState(0);
   const [completeness, setCompleteness] = useState<HistoricalCompleteness | null>(null);
@@ -93,13 +93,25 @@ export default function AccountDiagnosisPanel({ account, onClose }: {
         <span className="badge">数据完整度 {completeness?.score ?? 0}%</span>
         <span className="badge">当前状态 {diagnosis?.account.status || account.status}</span>
         {diagnosis && <ConfidenceBadge confidence={diagnosis.confidence} />}
-        <button className="btn btn-sm btn-primary" disabled={loading || running || postCount === 0}
+        {postCount > 0 && <button className="btn btn-sm btn-primary" disabled={loading || running}
           onClick={() => void run()}>
           {running ? '正在分析…' : diagnosis ? '重新诊断' : '开始首次诊断'}
-        </button>
+        </button>}
       </div>
       {postCount === 0 && !loading && (
-        <div role="status" style={{ marginTop: 12, color: 'var(--text-secondary)' }}>暂无历史内容，请先导入历史数据。</div>
+        <div role="status" className="card" style={{ marginTop: 14, padding: 16 }}>
+          <h3 style={{ margin: '0 0 7px', fontSize: 16 }}>首次账号诊断需要历史作品数据</h3>
+          <p style={{ margin: '0 0 12px', color: 'var(--text-secondary)', fontSize: 13 }}>
+            当前账号还没有历史作品数据。{account.platform === 'douyin'
+              ? '建议先从抖音创作者中心同步历史作品。'
+              : '请先导入或手动添加历史作品。'}
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {account.platform === 'douyin' && <button className="btn btn-sm btn-primary" onClick={onOpenCreatorSync}>从抖音创作者中心同步</button>}
+            <button className="btn btn-sm" onClick={onOpenHistory}>导入 CSV/XLSX</button>
+            <button className="btn btn-sm" onClick={onOpenHistory}>手动添加</button>
+          </div>
+        </div>
       )}
       {error && <div role="alert" style={{ color: 'var(--red)', fontSize: 13, marginTop: 12 }}>{error}</div>}
 

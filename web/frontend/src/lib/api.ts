@@ -644,7 +644,11 @@ export interface HistoricalSyncStatus {
 export interface CreatorCenterSyncSession {
   session_id: string;
   expires_at: string;
-  status: 'waiting_for_scan' | 'preview_ready';
+  status: 'extension_unavailable' | 'extension_available' | 'creator_tab_not_found' | 'not_logged_in'
+    | 'unsupported_page' | 'ready_to_scan' | 'scanning' | 'scan_completed' | 'scan_failed' | 'preview_ready';
+  extension_available?: boolean;
+  message?: string;
+  last_seen_at?: string | null;
   preview_id?: string | null;
   preview?: HistoricalImportPreview | null;
 }

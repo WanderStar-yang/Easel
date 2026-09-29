@@ -8,6 +8,18 @@ from secrets import token_urlsafe
 from urllib.parse import urlparse
 
 SESSION_TTL = timedelta(minutes=15)
+SYNC_STATES = {
+    "extension_unavailable",
+    "extension_available",
+    "creator_tab_not_found",
+    "not_logged_in",
+    "unsupported_page",
+    "ready_to_scan",
+    "scanning",
+    "scan_completed",
+    "scan_failed",
+    "preview_ready",
+}
 
 
 class HistoricalSyncSessionManager:
@@ -23,12 +35,13 @@ class HistoricalSyncSessionManager:
         now = self._now()
         session_id = token_urlsafe(32)
         session = {"account_id": account_id, "created_at": now, "expires_at": now + SESSION_TTL,
-                   "preview_id": None, "summary": None}
+                   "preview_id": None, "summary": None, "status": "extension_unavailable",
+                   "extension_available": False, "message": "等待浏览器辅助扩展连接", "last_seen_at": None}
         with self._lock:
             self._prune(now)
             self._sessions[session_id] = session
         return {"session_id": session_id, "expires_at": session["expires_at"].isoformat(),
-                "status": "waiting_for_scan"}
+                "status": session["status"], "extension_available": False, "message": session["message"]}
 
     def _prune(self, now: datetime) -> None:
         expired = [key for key, value in self._sessions.items() if value["expires_at"] <= now]
@@ -51,6 +64,28 @@ class HistoricalSyncSessionManager:
                 raise LookupError(session_id)
             session["preview_id"] = preview_id
             session["summary"] = summary
+            session["status"] = "scan_completed"
+            session["extension_available"] = True
+            session["message"] = "扫描完成，预览已送达 Easel；确认前不会写入历史作品"
+            session["last_seen_at"] = self._now()
+        return self.get(account_id, session_id)
+
+    def report_state(self, account_id: str, session_id: str, status: str, message: str = "",
+                     source_url: str = "") -> dict:
+        if status not in SYNC_STATES - {"preview_ready"}:
+            raise ValueError("不支持的同步状态")
+        if source_url and not self.validate_creator_center_url(source_url):
+            raise PermissionError("扩展状态只接受抖音创作者中心页面")
+        with self._lock:
+            now = self._now()
+            self._prune(now)
+            session = self._sessions.get(session_id)
+            if session is None or session["account_id"] != account_id:
+                raise LookupError(session_id)
+            session["status"] = status
+            session["extension_available"] = True
+            session["message"] = message[:300]
+            session["last_seen_at"] = now
         return self.get(account_id, session_id)
 
     def get(self, account_id: str, session_id: str) -> dict:
@@ -61,8 +96,11 @@ class HistoricalSyncSessionManager:
                 raise LookupError(session_id)
             return {
                 "session_id": session_id,
-                "status": "preview_ready" if session["preview_id"] else "waiting_for_scan",
+                "status": "preview_ready" if session["preview_id"] else session["status"],
+                "extension_available": session["extension_available"],
                 "preview_id": session["preview_id"],
                 "preview": session["summary"],
+                "message": session["message"],
+                "last_seen_at": session["last_seen_at"].isoformat() if session["last_seen_at"] else None,
                 "expires_at": session["expires_at"].isoformat(),
             }

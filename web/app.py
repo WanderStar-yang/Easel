@@ -498,10 +498,10 @@ async def local_write_guard(request: Request, call_next):
     不受信任的网络（公共 WiFi、无防火墙的公网主机）上。
     """
     origin = request.headers.get('origin')
-    sync_preview_path = re.fullmatch(
-        r'/api/operator/accounts/[^/]+/posts/sync/sessions/[^/]+/preview', request.url.path,
+    sync_extension_path = re.fullmatch(
+        r'/api/operator/accounts/[^/]+/posts/sync/sessions/[^/]+/(?:preview|extension-state)', request.url.path,
     )
-    if sync_preview_path and origin and re.fullmatch(r'chrome-extension://[a-p]{32}', origin):
+    if sync_extension_path and origin and re.fullmatch(r'chrome-extension://[a-p]{32}', origin):
         headers = {
             'Access-Control-Allow-Origin': origin,
             'Access-Control-Allow-Methods': 'POST',

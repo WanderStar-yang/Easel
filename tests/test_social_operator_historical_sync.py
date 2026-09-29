@@ -179,6 +179,15 @@ def test_phase3_sqlite_schema_migrates_additive_sync_metadata(tmp_path):
 
 def test_sync_session_expires_by_account_and_rejects_other_origin(services):
     session = services.sync_sessions.create("douyin-pet")
+    assert session["status"] == "extension_unavailable"
+    assert session["extension_available"] is False
+    connected = services.sync_sessions.report_state(
+        "douyin-pet", session["session_id"], "not_logged_in", "请自行登录",
+        "https://creator.douyin.com/creator-micro/content/manage",
+    )
+    assert connected["status"] == "not_logged_in"
+    assert connected["extension_available"] is True
+    assert connected["message"] == "请自行登录" and connected["last_seen_at"]
     with pytest.raises(LookupError):
         services.sync_sessions.get("xhs-developer", session["session_id"])
     with pytest.raises(PermissionError):
@@ -201,6 +210,23 @@ def test_sync_api_preview_confirm_status_diagnosis_and_platform_isolation(servic
         start = client.post("/api/operator/accounts/douyin-pet/posts/sync/sessions")
         assert start.status_code == 201, start.text
         session_id = start.json()["session_id"]
+        assert start.json()["status"] == "extension_unavailable"
+        assert start.json()["extension_available"] is False
+        ext_state = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session_id}/extension-state",
+            json={"status": "not_logged_in", "message": "请自行扫码登录",
+                  "source_url": "https://creator.douyin.com/login"},
+        )
+        assert ext_state.status_code == 200 and ext_state.json()["status"] == "not_logged_in"
+        assert ext_state.json()["extension_available"] is True
+        for state in ("extension_available", "creator_tab_not_found", "unsupported_page", "ready_to_scan",
+                      "scanning", "scan_completed", "scan_failed"):
+            ready_state = client.post(
+                f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session_id}/extension-state",
+                json={"status": state, "message": state,
+                      "source_url": "https://creator.douyin.com/creator-micro/content/manage"},
+            )
+            assert ready_state.status_code == 200 and ready_state.json()["status"] == state
         invalid_origin = client.post(
             f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session_id}/preview",
             json={"source_url": "https://example.com/", "records": []},
@@ -239,7 +265,7 @@ def test_sync_api_preview_confirm_status_diagnosis_and_platform_isolation(servic
         next(client_ctx, None)
 
 
-def test_chrome_extension_preflight_is_restricted_to_sync_preview_path(services):
+def test_chrome_extension_preflight_is_restricted_to_sync_paths(services):
     from web.app import app
 
     app.dependency_overrides[get_historical_services] = lambda: services
@@ -247,10 +273,21 @@ def test_chrome_extension_preflight_is_restricted_to_sync_preview_path(services)
         client = TestClient(app, base_url="http://127.0.0.1:7860", client=("127.0.0.1", 53112))
         origin = "chrome-extension://" + "a" * 32
         path = "/api/operator/accounts/douyin-pet/posts/sync/sessions/opaque-token/preview"
+        state_path = "/api/operator/accounts/douyin-pet/posts/sync/sessions/opaque-token/extension-state"
         response = client.options(path, headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == origin
+        state_response = client.options(state_path, headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
+        assert state_response.status_code == 200
+        assert state_response.headers["access-control-allow-origin"] == origin
         session = services.sync_sessions.create("douyin-pet")
+        reported = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session['session_id']}/extension-state",
+            headers={"Origin": origin, "Content-Type": "application/json"},
+            json={"status": "extension_available", "message": "扩展连接成功"},
+        )
+        assert reported.status_code == 200 and reported.headers["access-control-allow-origin"] == origin
+        assert reported.json()["status"] == "extension_available"
         posted = client.post(
             f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session['session_id']}/preview",
             headers={"Origin": origin, "Content-Type": "application/json"},

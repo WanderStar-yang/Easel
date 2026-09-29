@@ -5,7 +5,7 @@ const vm = require('node:vm');
 
 require('../../browser-helpers/douyin-sync/merge.js');
 
-function scanCreatorPage(cards, bodyText = '作品管理') {
+function scanCreatorPage(cards, bodyText = '作品管理', pathname = '/creator-micro/content/manage') {
   const window = {};
   const nodes = cards.map(({ title, body, href, hidden = false }) => {
     const card = {
@@ -24,10 +24,11 @@ function scanCreatorPage(cards, bodyText = '作品管理') {
     title: '抖音创作者中心',
     body: { innerText: bodyText },
     querySelectorAll: () => nodes,
+    querySelector: () => null,
   };
   const source = fs.readFileSync(require.resolve('../../browser-helpers/douyin-sync/scanner.js'), 'utf8');
-  vm.runInNewContext(source, { window, document });
-  return window.__easelDouyinScanVisible();
+  vm.runInNewContext(source, { window, document, location: { pathname } });
+  return { ...window.__easelDouyinScanVisible(), pageState: window.__easelDouyinInspect() };
 }
 
 test('scans accumulated across pages merge repeated cards without dropping new posts', () => {
@@ -50,10 +51,13 @@ test('scans accumulated across pages merge repeated cards without dropping new p
 test('creator center login page, empty list, multiple works, missing metrics, and visible zeroes', () => {
   const login = scanCreatorPage([], '请登录后查看作品数据');
   assert.equal(login.loginPrompt, true);
+  assert.equal(login.pageState.loginPrompt, true);
   assert.equal(login.rows.length, 0);
 
   const empty = scanCreatorPage([]);
   assert.equal(empty.loginPrompt, false);
+  assert.equal(empty.pageState.supportedPage, true);
+  assert.equal(scanCreatorPage([], '首页内容', '/creator-micro/home').pageState.supportedPage, false);
 
   const scanned = scanCreatorPage([
     { title: '猫咪抢窝', body: '发布时间 2026-09-20 12:30 视频时长 00:23 播放量 1.2万 点赞 0 评论 5 收藏 7 分享 2', href: 'https://creator.douyin.com/video/1001' },

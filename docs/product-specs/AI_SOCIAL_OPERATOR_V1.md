@@ -276,10 +276,10 @@ V1 为 B 级自动化。
 读取 → 标准化 → Preview → 用户确认 → Persist
 ```
 
-CSV/XLSX 与人工录入继续保留。抖音 V1 数据来源优先级为：
+CSV/XLSX 与人工录入继续保留。抖音 V1 默认主流程为创作者中心辅助同步；OpenAPI 仅作为次要高级选项，不得作为首次诊断前置条件：
 
-1. 抖音官方 OpenAPI（用户授权且权限可用时）
-2. 抖音创作者中心辅助同步
+1. 抖音创作者中心辅助同步（Douyin Creator Center Assisted Sync）
+2. 抖音官方 OpenAPI（次要选项；用户授权且权限可用时）
 3. CSV/XLSX 导入
 4. 人工录入
 
@@ -289,11 +289,13 @@ CSV/XLSX 与人工录入继续保留。抖音 V1 数据来源优先级为：
 
 通过 `HistoricalDataSourceAdapter` 将不同来源映射为统一 `HistoricalPost`。首期适配器包括 `DouyinOpenApiAdapter`、`DouyinCreatorCenterAdapter`、`FileImportAdapter` 和 `ManualInputAdapter`。适配器负责事实字段的标准化，不做 AI 内容分类。人工表单由用户点击保存作为确认后写入；OpenAPI、创作者中心、CSV/XLSX 批量数据须进入统一预览后由用户确认。
 
-抖音 OpenAPI 后续接入 `video.list` 与 `video.data`，支持用户授权、分页和作品指标读取。未配置 `client_key`、`client_secret` 或所需权限时，必须显示“尚未配置抖音开放平台权限”，不得伪造结果。
+抖音 OpenAPI 后续接入 `video.list` 与 `video.data`，支持用户授权、分页和作品指标读取。未配置 `client_key`、`client_secret` 或所需权限时，必须显示“尚未配置抖音开放平台权限”，不得伪造结果；该状态不得阻止创作者中心、CSV/XLSX 或手动录入。
 
 创作者中心辅助同步使用浏览器页面上用户已登录并主动打开的可见 DOM。它不得获取账号密码或 Cookie、自动登录、绕过验证码、调用逆向私有 API、自动发布或互动。不可读取的字段保持空值；真实的零值保留为 `0`，不可将缺失指标填成 `0`。扫描阶段只提取作品 ID、标题、发布时间、时长和页面实际展示的播放/点赞/评论/收藏/分享数据，不推断主体、内容来源、Hook 或 Content Pillar。
 
 抖音重复同步时优先以 `accountId + platformPostId` 更新可变化指标，不重复新建作品；缺少作品 ID 时沿用 Phase 2 的账号、平台、发布时间和标题规则。每条作品记录来源及来源更新时间，账号记录最近同步时间。文件导入、页面扫描与 OpenAPI 均共用同一个 Preview、校验、去重/更新和确认写入流程。同步完成不自动运行 Diagnosis，用户需主动重新诊断。
+
+当用户打开抖音首次诊断且该账号没有 `HistoricalPost` 时，页面必须明确提示先准备历史作品，并以「从抖音创作者中心同步」作为主操作；CSV/XLSX 与手动添加作为辅助入口。Chrome 扩展通过短时 account-scoped 同步会话主动回报连接、当前标签页、登录、作品页和扫描状态。浏览器扩展不可由网页直接枚举，因此未收到扩展握手时必须清楚显示“未检测到扩展连接”和安装/连接指引。确认预览写库后显示作品数，并提供主动运行首次诊断的入口，不自动运行。
 
 ---
 

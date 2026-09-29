@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
@@ -188,6 +189,15 @@ class CreatorCenterPreview(BaseModel):
     records: list[dict] = Field(max_length=5000)
 
 
+class CreatorCenterExtensionState(BaseModel):
+    status: Literal[
+        "extension_available", "creator_tab_not_found", "not_logged_in", "unsupported_page",
+        "ready_to_scan", "scanning", "scan_completed", "scan_failed",
+    ]
+    message: str = Field(default="", max_length=300)
+    source_url: str = ""
+
+
 @router.get("/sync/status")
 def get_sync_status(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
     _account(services, account_id)
@@ -210,6 +220,25 @@ def create_sync_session(account_id: str, services: HistoricalServices = Depends(
     if account.platform != Platform.DOUYIN:
         raise HTTPException(status_code=409, detail="创作者中心辅助同步仅适用于抖音账号")
     return services.sync_sessions.create(account_id)
+
+
+@router.post("/sync/sessions/{session_id}/extension-state")
+def report_extension_state(account_id: str, session_id: str, payload: CreatorCenterExtensionState,
+                           services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    account = services.accounts.get_account(account_id)
+    if account.platform != Platform.DOUYIN:
+        raise HTTPException(status_code=409, detail="创作者中心辅助同步仅适用于抖音账号")
+    try:
+        return services.sync_sessions.report_state(
+            account_id, session_id, payload.status, payload.message, payload.source_url,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="同步会话不存在、已过期或不属于当前账号") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/sync/sessions/{session_id}")

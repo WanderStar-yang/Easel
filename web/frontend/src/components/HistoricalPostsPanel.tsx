@@ -54,8 +54,8 @@ function formToPayload(form: FormState): HistoricalPostInput {
   };
 }
 
-export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis }: {
-  account: OperatorAccount; onClose: () => void; onRunDiagnosis?: () => void;
+export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis, autoStartSync = false }: {
+  account: OperatorAccount; onClose: () => void; onRunDiagnosis?: () => void; autoStartSync?: boolean;
 }) {
   const [posts, setPosts] = useState<HistoricalPost[]>([]);
   const [postTotal, setPostTotal] = useState(0);
@@ -72,6 +72,9 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
   const [openApiStatus, setOpenApiStatus] = useState<DouyinOpenApiStatus | null>(null);
   const [syncSession, setSyncSession] = useState<CreatorCenterSyncSession | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
+  const [syncWizardOpen, setSyncWizardOpen] = useState(false);
+  const [otherImportOpen, setOtherImportOpen] = useState(false);
+  const [syncConfirmed, setSyncConfirmed] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -107,9 +110,9 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
       try {
         const current = await getCreatorCenterSyncSession(account.id, syncSession.session_id);
         if (stopped) return;
+        setSyncSession(current);
         if (current.status === 'preview_ready' && current.preview) {
           setPreview(current.preview);
-          setSyncSession(current);
           setImportMessage('扫描结果已送达。请检查预览后确认导入。');
         }
       } catch {
@@ -172,7 +175,8 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
     try {
       const result = await confirmHistoricalImport(account.id, preview.preview_id);
       if (result.data_source === 'DOUYIN_CREATOR_CENTER') {
-        setImportMessage(`历史数据已同步：扫描 ${result.scanned_count} 条，新增 ${result.imported_count} 条，更新 ${result.updated_count} 条，重复 ${result.skipped_duplicate_count} 条，错误 ${result.error_count} 条。诊断不会自动运行。`);
+        setImportMessage(`已同步 ${result.imported_count + result.updated_count} 条历史作品。扫描 ${result.scanned_count} 条，新增 ${result.imported_count} 条，更新 ${result.updated_count} 条，重复 ${result.skipped_duplicate_count} 条，错误 ${result.error_count} 条。`);
+        setSyncConfirmed(true);
         setSyncSession(null);
         setSyncStatus(await getHistoricalSyncStatus(account.id));
       } else {
@@ -195,7 +199,9 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
     try {
       const session = await createCreatorCenterSyncSession(account.id);
       setSyncSession(session);
-      setImportMessage('同步会话已创建。请打开抖音创作者中心、手动登录，再从扩展扫描。');
+      setSyncWizardOpen(true);
+      setSyncConfirmed(false);
+      setImportMessage('同步向导已启动。请先安装并连接浏览器辅助扩展。');
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建同步会话失败');
     } finally {
@@ -207,10 +213,42 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
     if (!syncSession?.session_id) return;
     try {
       await navigator.clipboard.writeText(syncSession.session_id);
-      setImportMessage('会话码已复制。请粘贴到 Easel 抖音同步扩展。');
+      setImportMessage('会话码已复制。请粘贴到 Chrome 的 Easel 抖音同步扩展。');
     } catch {
       setError('浏览器未允许复制，请手动选择并复制会话码。');
     }
+  };
+
+  const refreshSyncState = async () => {
+    if (!syncSession) return;
+    try {
+      const current = await getCreatorCenterSyncSession(account.id, syncSession.session_id);
+      setSyncSession(current);
+      if (current.status === 'preview_ready' && current.preview) {
+        setPreview(current.preview);
+        setImportMessage('扫描结果已送达。请检查预览后确认导入。');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '同步会话已过期，请重新开始。');
+    }
+  };
+
+  const openCreatorCenter = () => {
+    window.open('https://creator.douyin.com/creator-micro/content/manage', '_blank', 'noopener,noreferrer');
+  };
+
+  useEffect(() => {
+    if (autoStartSync && isDouyin) void startCreatorSync();
+    // Start a new short-lived account-bound sync session only on entry from the empty-diagnosis guide.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.id, autoStartSync]);
+
+  const syncStateLabels: Record<CreatorCenterSyncSession['status'], string> = {
+    extension_unavailable: '未检测到扩展连接', extension_available: '扩展已连接',
+    creator_tab_not_found: '未找到创作者中心标签页', not_logged_in: '等待你在网页中自行登录',
+    unsupported_page: '当前不是作品管理页面', ready_to_scan: '作品管理页面就绪，可以扫描',
+    scanning: '正在扫描历史作品', scan_completed: '扫描完成，等待预览', preview_ready: '同步预览已就绪',
+    scan_failed: '扫描失败',
   };
 
   const isDouyin = account.platform === 'douyin';
@@ -236,25 +274,42 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
         <span className="badge">历史作品 {completeness?.sample_size ?? 0} 条</span>
         <span className="badge">数据完整度 {completeness?.score ?? 0}%</span>
         {isDouyin && <button className="btn btn-sm btn-primary" onClick={() => void startCreatorSync()} disabled={sessionBusy}>
-          {sessionBusy ? '创建会话…' : '从抖音同步'}
+          {sessionBusy ? '创建会话…' : '从抖音创作者中心同步'}
         </button>}
-        <button className="btn btn-sm" onClick={() => fileRef.current?.click()}>导入 CSV / XLSX</button>
-        <button className="btn btn-sm" onClick={openCreate}>+ 手动添加</button>
+        {isDouyin ? (
+          <button className="btn btn-sm" onClick={() => setOtherImportOpen((open) => !open)}>
+            其他导入方式 {otherImportOpen ? '▲' : '▼'}
+          </button>
+        ) : <>
+          <button className="btn btn-sm" onClick={() => fileRef.current?.click()}>导入 CSV / XLSX</button>
+          <button className="btn btn-sm" onClick={openCreate}>+ 手动添加</button>
+        </>}
         <input ref={fileRef} type="file" accept=".csv,.xlsx" hidden
           onChange={(event) => void chooseFile(event.target.files?.[0])} />
       </div>
 
+      {isDouyin && otherImportOpen && (
+        <div className="card" style={{ marginTop: 12, padding: 12 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-sm" onClick={() => fileRef.current?.click()}>导入 CSV / XLSX</button>
+            <button className="btn btn-sm" onClick={openCreate}>手动添加</button>
+          </div>
+          <details style={{ marginTop: 10 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 13 }}>抖音官方 OpenAPI（高级选项）</summary>
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+              状态：{openApiStatus?.configured ? '已配置' : '未配置'}。{openApiStatus?.message || '正在检查配置…'}
+              {openApiStatus && !openApiStatus.configured && ` 缺少：${openApiStatus.missing_configuration.join('、')}`}
+              <div style={{ marginTop: 5 }}>OpenAPI 不是 V1 同步前置条件，未配置时仍可通过创作者中心同步。</div>
+              <a href="https://open.douyin.com/" target="_blank" rel="noreferrer">查看抖音开放平台配置说明</a>
+            </div>
+          </details>
+        </div>
+      )}
+
       {isDouyin && (
         <div className="card" style={{ marginTop: 12, padding: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>抖音历史同步</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>抖音创作者中心同步</div>
           <div style={{ marginTop: 5, fontSize: 12, color: 'var(--text-secondary)' }}>
-            {openApiStatus?.message || '正在检查官方接口配置…'}
-            {openApiStatus && !openApiStatus.configured && <span>（缺少：{openApiStatus.missing_configuration.join('、')}；权限需另在开放平台确认）</span>}
-          </div>
-          <a href="https://open.douyin.com/" target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
-            抖音开放平台授权与权限申请
-          </a>
-          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
             上次同步：{syncStatus?.last_sync_at ? new Date(syncStatus.last_sync_at).toLocaleString() : '尚未同步'}
             {syncStatus?.last_sync_source ? ` · 来源 ${syncStatus.last_sync_source}` : ''}
             {` · 当前作品 ${postTotal} 条`}
@@ -262,17 +317,37 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
               ? ` · 上次新增 ${syncStatus.last_sync_counts.inserted_count ?? 0} / 更新 ${syncStatus.last_sync_counts.updated_count ?? 0} / 重复 ${syncStatus.last_sync_counts.duplicate_count ?? 0}`
               : ''}
           </div>
-          {syncSession && (
-            <div style={{ marginTop: 10, fontSize: 12 }}>
-              <div>1. 打开抖音创作者中心并手动登录，进入作品管理页。</div>
-              <a href="https://creator.douyin.com/creator-micro/content/manage" target="_blank" rel="noreferrer">打开创作者中心作品管理</a>
-              <div style={{ marginTop: 5 }}>2. 在 Chrome 加载仓库目录 <code>browser-helpers/douyin-sync</code> 内的未打包扩展。</div>
-              <div>3. 点扩展图标，粘贴会话码；翻页或滚动后继续扫描，最后生成预览。</div>
-              <div>会话有效期 15 分钟，等待扩展提交扫描结果…</div>
+          {syncWizardOpen && syncSession && (
+            <div className="card" style={{ marginTop: 10, padding: 12 }} aria-label="抖音创作者中心同步向导">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <strong>同步向导 · {account.name}</strong>
+                <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
+                  <span className={`badge ${syncSession.extension_available ? 'badge-ok' : ''}`}>
+                    {syncSession.extension_available ? '扩展已连接' : '扩展不可用'}
+                  </span>
+                  <span className="badge">{syncStateLabels[syncSession.status]}</span>
+                </span>
+              </div>
+              <div role="status" style={{ fontSize: 12, marginTop: 8 }}>{syncSession.message}</div>
+              <ol style={{ paddingLeft: 22, fontSize: 12, lineHeight: 1.7 }}>
+                <li>
+                  <strong>检测扩展</strong>：如果未安装，请打开 Chrome 扩展程序页，开启“开发者模式”，选择“加载已解压的扩展程序”，载入仓库目录 <code>browser-helpers/douyin-sync/</code>。安装后在扩展弹窗粘贴下面的会话码并点击“检测当前页面并连接”。
+                  {syncSession.status === 'extension_unavailable' && <div style={{ marginTop: 5 }}>需要安装 Douyin Sync 浏览器辅助扩展。浏览器网页不能直接枚举扩展；连接成功后此处会自动更新。</div>}
+                </li>
+                <li>
+                  <strong>打开创作者中心</strong>：点击下方按钮后，请在新标签页中自行扫码或登录。系统不会自动登录或读取凭证。
+                  <div><button className="btn btn-sm" onClick={openCreatorCenter}>打开抖音创作者中心</button></div>
+                </li>
+                <li><strong>检测页面</strong>：登录后进入作品管理 / 内容管理 / 视频列表，再从扩展弹窗点击“检测当前页面并连接”。状态会显示“可扫描”。</li>
+                <li><strong>扫描并预览</strong>：在扩展弹窗点击“开始扫描历史作品”。扩展会辅助滚动并尝试翻页；随后点击“返回 Easel 生成预览”。扫描不写数据库。</li>
+                <li><strong>确认导入</strong>：Easel 显示作品预览后，检查新建、更新、重复、错误和缺失字段，再点击“确认导入”。</li>
+              </ol>
               <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
                 <input className="field" readOnly value={syncSession.session_id} aria-label="同步会话码" />
                 <button className="btn btn-sm" onClick={() => void copySessionId()}>复制会话码</button>
+                <button className="btn btn-sm" onClick={() => void refreshSyncState()}>我已安装，重新检测</button>
               </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>会话 15 分钟有效。页面状态来自扩展主动上报；可检测扩展未连接、创作者中心标签页缺失、未登录、不支持页面、可扫描、扫描中、完成或失败。</div>
             </div>
           )}
         </div>
@@ -355,9 +430,9 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
         </div>
       )}
 
-      {syncStatus?.last_sync_at && !preview && onRunDiagnosis && (
-        <button className="btn btn-sm btn-primary" style={{ marginTop: 12 }} onClick={onRunDiagnosis}>
-          重新运行首次诊断
+      {syncConfirmed && !preview && onRunDiagnosis && (
+        <button className="btn btn-sm btn-primary" style={{ marginTop: 12 }} onClick={onRunDiagnosis} disabled={postTotal === 0}>
+          开始首次账号诊断
         </button>
       )}
 

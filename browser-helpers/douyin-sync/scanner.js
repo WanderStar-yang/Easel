@@ -1,4 +1,13 @@
 // Executed only in the active creator.douyin.com tab after the user clicks Scan.
+window.__easelDouyinInspect = () => {
+  const body = document.body?.innerText || '';
+  const loginPrompt = /\/login|\/passport|请登录|扫码登录|登录抖音|登录后/.test(`${location.pathname} ${body.slice(0, 1200)}`)
+    && !document.querySelector("[class*='info-title-text'], [class*='info-title-operation']");
+  const pageLabel = /作品管理|内容管理|视频列表/.test(body);
+  const supportedPage = !loginPrompt && (location.pathname.includes('/content/manage') || pageLabel);
+  return { loginPrompt, supportedPage, pageTitle: document.title, path: location.pathname };
+};
+
 window.__easelDouyinScanVisible = () => {
   const visible = (node) => Boolean(node?.getClientRects?.().length);
   const text = (node) => (node?.innerText || node?.textContent || '').replace(/\s+/g, ' ').trim();

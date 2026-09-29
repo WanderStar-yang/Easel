@@ -349,7 +349,7 @@ REVIEWING
 
 - Phase 2 `HistoricalImportService` 的行标准化、校验、重复检查、预览与确认写库；OpenAPI、Creator Center、CSV/XLSX 批量来源统一走 Preview → Confirm → Persist。手工表单在用户点击保存时确认后写入。
 - Phase 3 Intelligence Engine 继续只读取 `HistoricalPost`，不得直接耦合抖音 API 或浏览器。
-- 新增 `HistoricalDataSourceAdapter` 接口与 `DouyinOpenApiAdapter`、`DouyinCreatorCenterAdapter`、`FileImportAdapter`、`ManualInputAdapter`。OpenAPI 适配器以配置/授权占位接入 `video.list` 和 `video.data`；无正式密钥或权限时显示“尚未配置抖音开放平台权限”，不得返回伪造作品。
+- 新增 `HistoricalDataSourceAdapter` 接口与 `DouyinOpenApiAdapter`、`DouyinCreatorCenterAdapter`、`FileImportAdapter`、`ManualInputAdapter`。Creator Center Assisted Sync 是抖音 V1 默认主入口；OpenAPI 仅作为次要高级选项，无正式密钥或权限时显示“未配置”，不得阻止其他方式，也不得返回伪造作品。
 - 现有 Easel 有 Playwright 登录态抓取，但未提供创作者中心用户主动查看页面的 DOM 读取通道。Creator Center 使用最小 Chrome Manifest V3 Browser Helper：仅响应用户在 `creator.douyin.com` 上的主动扫描操作，读取当前渲染的可见 DOM；用户翻页后可继续扫描并累计。扩展不得读凭证/Cookie、自动登录、绕过验证码或调用私有 API。若页面结构不匹配，显示无法识别并允许用户改用 CSV/人工录入。
 
 ## 同步与数据规则
@@ -364,7 +364,7 @@ REVIEWING
 ## API / UI
 
 - 在现有历史帖子路由下增加开始同步会话、查询会话预览和 OpenAPI 配置状态端点；扩展上送可见 DOM 记录。预览结果最终通过同一 HistoricalImportService 和既有确认写入合同保存。
-- 抖音账号历史页主操作为“从抖音同步”，显示登录指引、扫描状态和最后同步来源/时间、新增/更新/重复计数；辅助保留 CSV/XLSX 导入和手动新增。确认预览后显示“历史数据已同步，共 XX 条”并链接主动重跑诊断。
+- 抖音账号历史页主操作为“从抖音创作者中心同步”，提供扩展安装、真实握手、打开创作者中心、用户自行登录、页面检测、扫描、预览和确认。CSV/XLSX 与手动新增留在“其他导入方式”，OpenAPI 放高级选项。
 - 小红书 UI、数据入口和导入逻辑不变。Easel 的原有 `/api/accounts`、登录、发布能力与页面合同保持兼容。
 
 ## 验收与测试
@@ -374,6 +374,27 @@ REVIEWING
 - Preview 阶段不写业务数据库；确认后原子持久化；Phase 3 可读取同步数据；小红书隔离。
 - CSV/XLSX 和人工 CRUD 回归，旧 `/api/accounts` 保持可用。
 - OpenAPI 无凭据/权限时只返回未配置状态。无授权环境时使用合成 DOM 样本测试适配器，不写死真实用户数据。
+
+---
+
+# 8.6 Phase 3.5.1 - Douyin Creator Center Sync UX Fix
+
+## 目标与边界
+
+把 Phase 3.5 已有的扩展扫描、同步会话和 Phase 2 Preview/Confirm 串成可发现、可反馈的产品主流程。本阶段不重做采集器、不接真实 OpenAPI、不实现 Phase 4。
+
+## 用户流程
+
+1. 首次诊断页面先查询当前账号 HistoricalPost 数量；数量为 0 时禁止运行诊断并引导先准备数据。抖音主按钮是“从抖音创作者中心同步”，CSV/XLSX 与手动添加为辅助入口。
+2. 启动 account-scoped、限时会话；未握手时明确显示扩展不可用及 Chrome 加载未打包扩展指引。
+3. Chrome 扩展主动回报状态，主应用显示 `Extension unavailable/available`、`Creator Center tab not found`、`not logged in`、`unsupported page`、`ready to scan`、`scanning`、`scan completed/failed`。
+4. 用户从主应用打开创作者中心新标签页，并自行登录；扩展仅在用户点击时读取可见 DOM，辅助滚动和可识别分页，不读取凭证或 Cookie。
+5. 扫描数据必须回到 Phase 2 统一预览；只有用户点击确认才持久化。成功后显示作品数量和主动运行首次诊断按钮。
+6. OpenAPI 移到其他同步方式中的高级设置，不成为默认前置。CSV/XLSX 和手动添加继续可用。
+
+## 复用与验收
+
+复用 Phase 3.5 Chrome MV3 Helper、account-scoped session API、Phase 2 HistoricalImportManager 和确认 API。人工验收应使用真实本地 Easel UI/后端走到“等待用户登录/开始扫描”，不要求访问真实用户作品；另报告真实 Creator Center 页面和登录状态未验证的限制。
 
 ---
 

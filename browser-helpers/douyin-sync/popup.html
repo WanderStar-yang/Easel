@@ -22,10 +22,11 @@
   <input id="session" autocomplete="off" placeholder="从 Easel 复制短时会话码">
   <label for="base">Easel 本地地址</label>
   <input id="base" value="http://localhost:7860" autocomplete="off">
-  <button id="scan" class="secondary">扫描当前页并累计</button>
-  <button id="submit">生成导入预览</button>
+  <button id="detect" class="secondary">检测当前页面并连接</button>
+  <button id="scan" class="secondary">开始扫描历史作品</button>
+  <button id="submit">返回 Easel 生成预览</button>
   <div id="status" role="status">请先在 Easel 创建同步会话，并在当前标签页打开已登录的抖音创作者中心。</div>
-  <div class="hint">助手只读取当前页已显示的信息。翻页或滚动加载后可再次扫描；未提交前数据只暂存在此浏览器扩展中。</div>
+  <div class="hint">只读取创作者中心作品管理页可见信息。扫描会辅助滚动并尝试使用明确的“下一页”按钮；未提交前数据只暂存在此浏览器扩展中。</div>
   <script src="merge.js"></script>
   <script src="popup.js"></script>
 </body>

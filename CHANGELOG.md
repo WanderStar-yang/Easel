@@ -11,6 +11,7 @@ All notable changes to Easel are documented in this file.
 - Added the reusable Account Intelligence Engine and persisted Initial Diagnosis reports for Douyin and Xiaohongshu, with evidence-linked metrics, confidence-aware comparisons, platform-specific Top/Low ranking, and an optional explanation through Easel's existing OpenClaw gateway.
 - Added a unified historical source-adapter path and a Chrome helper for user-initiated Douyin Creator Center DOM scanning. Scans enter the existing preview/confirm flow, support account-scoped incremental metric updates by platform post ID, and never trigger diagnosis automatically.
 - Added honest Douyin OpenAPI configuration status and a permission-application link; real OpenAPI authorization and video.list/video.data calls remain unimplemented until credentials and approved permissions are available.
+- Made Douyin Creator Center assisted sync the primary V1 path, added a first-diagnosis data gate and guided sync wizard, and wired extension-reported connection/login/page/scan states into the account-scoped sync session. OpenAPI now appears only under advanced import options; CSV/XLSX and manual entry remain available.
 
 ## [0.2.1] - 2026-09-24
 
