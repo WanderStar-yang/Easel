@@ -6,6 +6,7 @@ import {
 } from '../lib/api';
 import type { AccountItem, AccountWhoami, OperatorAccount } from '../lib/api';
 import { getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
+import HistoricalPostsPanel from './HistoricalPostsPanel';
 
 type QRState = {
   platform: string;
@@ -43,6 +44,7 @@ export default function AccountsPage() {
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [operatorAccounts, setOperatorAccounts] = useState<OperatorAccount[]>([]);
   const [operatorAccountsErr, setOperatorAccountsErr] = useState('');
+  const [historyAccount, setHistoryAccount] = useState<OperatorAccount | null>(null);
   const [err, setErr] = useState('');
   const [qr, setQr] = useState<QRState | null>(null);
   const [qrNonce, setQrNonce] = useState(0);   // 每次登录 +1，稳定缓存 key，避免每次轮询 img 闪烁
@@ -326,9 +328,14 @@ export default function AccountsPage() {
               <div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 10 }}>
                 <strong>Strategy</strong><br />{account.strategy.summary || '尚未填写'}
               </div>
+              <button className="btn btn-sm" style={{ marginTop: 14, width: '100%' }}
+                onClick={() => setHistoryAccount(account)}>
+                历史内容与导入
+              </button>
             </article>
           ))}
         </div>
+        {historyAccount && <HistoricalPostsPanel account={historyAccount} onClose={() => setHistoryAccount(null)} />}
       </section>
 
       <h2 style={{ fontSize: 18, margin: '0 0 6px' }}>平台登录连接</h2>

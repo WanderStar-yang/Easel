@@ -448,6 +448,135 @@ export function fetchOperatorAccounts(): Promise<OperatorAccount[]> {
   return request<OperatorAccount[]>('/api/operator/accounts');
 }
 
+export interface HistoricalPost {
+  id: string;
+  account_id: string;
+  platform: 'douyin' | 'xiaohongshu';
+  publish_time: string | null;
+  title: string;
+  content_type: string | null;
+  content_source: 'REAL' | 'AI' | 'MIXED' | 'UNKNOWN';
+  tags: string[];
+  note: string | null;
+  duration: number | null;
+  subjects: string[];
+  hook_type: string | null;
+  views: number | null;
+  exposure: number | null;
+  likes: number | null;
+  comments: number | null;
+  favorites: number | null;
+  shares: number | null;
+  followers_gain: number | null;
+  profile_visits: number | null;
+  inquiries: number | null;
+  platform_post_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HistoricalPostInput {
+  publish_time?: string | null;
+  title: string;
+  content_type?: string | null;
+  content_source?: HistoricalPost['content_source'];
+  tags?: string[];
+  note?: string | null;
+  duration?: number | null;
+  subjects?: string[];
+  hook_type?: string | null;
+  views?: number | null;
+  exposure?: number | null;
+  likes?: number | null;
+  comments?: number | null;
+  favorites?: number | null;
+  shares?: number | null;
+  followers_gain?: number | null;
+  profile_visits?: number | null;
+  inquiries?: number | null;
+  platform_post_id?: string | null;
+}
+
+export interface HistoricalPostsPage {
+  items: HistoricalPost[];
+  offset: number;
+  limit: number;
+  total: number;
+}
+
+export interface HistoricalCompleteness {
+  account_id: string;
+  platform: 'douyin' | 'xiaohongshu';
+  score: number;
+  sample_size: number;
+  coverage: Record<string, number>;
+  weights: Record<string, number>;
+}
+
+export interface HistoricalImportPreview {
+  preview_id: string;
+  total_rows: number;
+  importable_count: number;
+  error_count: number;
+  duplicate_count: number;
+  missing_fields: Array<{ field: string; missing_rows: number; column_missing: boolean }>;
+  headers: string[];
+  rows: Array<{
+    row: number;
+    status: 'ready' | 'invalid' | 'duplicate';
+    errors: Record<string, string>;
+    duplicate_of: string | null;
+    record: Record<string, unknown>;
+  }>;
+  preview_truncated: boolean;
+}
+
+function operatorPostsPath(accountId: string): string {
+  return `/api/operator/accounts/${encodeURIComponent(accountId)}/posts`;
+}
+
+export function fetchHistoricalPosts(accountId: string): Promise<HistoricalPostsPage> {
+  return request<HistoricalPostsPage>(operatorPostsPath(accountId));
+}
+
+export function getHistoricalCompleteness(accountId: string): Promise<HistoricalCompleteness> {
+  return request<HistoricalCompleteness>(`${operatorPostsPath(accountId)}/completeness`);
+}
+
+export function createHistoricalPost(accountId: string, payload: HistoricalPostInput): Promise<HistoricalPost> {
+  return request<HistoricalPost>(operatorPostsPath(accountId), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+export function updateHistoricalPost(
+  accountId: string, postId: string, payload: Partial<HistoricalPostInput>,
+): Promise<HistoricalPost> {
+  return request<HistoricalPost>(`${operatorPostsPath(accountId)}/${encodeURIComponent(postId)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+export function deleteHistoricalPost(accountId: string, postId: string): Promise<{ deleted: boolean; id: string }> {
+  return request<{ deleted: boolean; id: string }>(`${operatorPostsPath(accountId)}/${encodeURIComponent(postId)}`, { method: 'DELETE' });
+}
+
+export function previewHistoricalImport(accountId: string, file: File): Promise<HistoricalImportPreview> {
+  const body = new FormData();
+  body.append('file', file);
+  return request<HistoricalImportPreview>(`${operatorPostsPath(accountId)}/imports/preview`, {
+    method: 'POST', body,
+  });
+}
+
+export function confirmHistoricalImport(
+  accountId: string, previewId: string,
+): Promise<{ imported_count: number; skipped_duplicate_count: number; error_count: number }> {
+  return request<{ imported_count: number; skipped_duplicate_count: number; error_count: number }>(`${operatorPostsPath(accountId)}/imports/confirm`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preview_id: previewId }),
+  });
+}
+
 export interface AccountWhoami {
   loggedIn: boolean;
   name: string;

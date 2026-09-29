@@ -63,7 +63,37 @@ class OperatorAccountRepository:
                         CHECK (state IN ('hypothesis', 'recommended', 'confirmed')),
                     confirmed_at TEXT
                 );
-                PRAGMA user_version = 1;
+                CREATE TABLE IF NOT EXISTS historical_posts (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    platform TEXT NOT NULL CHECK (platform IN ('douyin', 'xiaohongshu')),
+                    publish_time TEXT,
+                    title TEXT NOT NULL,
+                    content_type TEXT,
+                    content_source TEXT NOT NULL CHECK (content_source IN ('REAL', 'AI', 'MIXED', 'UNKNOWN')),
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    note TEXT,
+                    duration REAL CHECK (duration IS NULL OR duration >= 0),
+                    subjects_json TEXT NOT NULL DEFAULT '[]',
+                    hook_type TEXT,
+                    views INTEGER CHECK (views IS NULL OR views >= 0),
+                    likes INTEGER CHECK (likes IS NULL OR likes >= 0),
+                    comments INTEGER CHECK (comments IS NULL OR comments >= 0),
+                    favorites INTEGER CHECK (favorites IS NULL OR favorites >= 0),
+                    shares INTEGER CHECK (shares IS NULL OR shares >= 0),
+                    followers_gain INTEGER,
+                    profile_visits INTEGER CHECK (profile_visits IS NULL OR profile_visits >= 0),
+                    inquiries INTEGER CHECK (inquiries IS NULL OR inquiries >= 0),
+                    platform_post_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_historical_posts_account_time
+                    ON historical_posts(account_id, publish_time DESC, id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_historical_posts_platform_id
+                    ON historical_posts(account_id, platform_post_id)
+                    WHERE platform_post_id IS NOT NULL AND platform_post_id != '';
+                PRAGMA user_version = 2;
                 """
             )
 
@@ -177,3 +207,118 @@ class OperatorAccountRepository:
                 conn.execute("UPDATE operator_strategies SET summary = ? WHERE account_id = ?",
                              (values["strategy_summary"], account_id))
         return self.get_account(account_id)
+
+    @staticmethod
+    def _post(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["tags"] = json.loads(result.pop("tags_json"))
+        result["subjects"] = json.loads(result.pop("subjects_json"))
+        return result
+
+    def list_posts(self, account_id: str, *, offset: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM historical_posts WHERE account_id = ? "
+                "ORDER BY publish_time IS NULL, publish_time DESC, created_at DESC LIMIT ? OFFSET ?",
+                (account_id, limit, offset),
+            ).fetchall()
+        return [self._post(row) for row in rows]
+
+    def count_posts(self, account_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS total FROM historical_posts WHERE account_id = ?",
+                               (account_id,)).fetchone()
+        return int(row["total"])
+
+    def get_post(self, account_id: str, post_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM historical_posts WHERE account_id = ? AND id = ?",
+                (account_id, post_id),
+            ).fetchone()
+        return self._post(row) if row else None
+
+    @staticmethod
+    def _duplicate_query(conn: sqlite3.Connection, values: dict[str, Any], exclude_id: str | None = None):
+        if values.get("platform_post_id"):
+            sql = "SELECT id FROM historical_posts WHERE account_id = ? AND platform_post_id = ?"
+            params: tuple[Any, ...] = (values["account_id"], values["platform_post_id"])
+        elif values.get("publish_time") and values.get("title"):
+            sql = "SELECT id FROM historical_posts WHERE account_id = ? AND platform = ? " \
+                  "AND publish_time = ? AND lower(trim(title)) = lower(trim(?))"
+            params = (values["account_id"], values["platform"], values["publish_time"], values["title"])
+        else:
+            return None
+        if exclude_id:
+            sql += " AND id != ?"
+            params += (exclude_id,)
+        row = conn.execute(sql + " LIMIT 1", params).fetchone()
+        return row["id"] if row else None
+
+    def find_duplicate(self, values: dict[str, Any], exclude_id: str | None = None) -> str | None:
+        with self._connect() as conn:
+            return self._duplicate_query(conn, values, exclude_id)
+
+    def create_post(self, post_id: str, values: dict[str, Any], now: str) -> dict[str, Any]:
+        inserted, duplicates = self.create_posts([(post_id, values)], now)
+        if duplicates:
+            return {"duplicate_id": duplicates[0][1]}
+        return self.get_post(values["account_id"], inserted[0]) or {}
+
+    def create_posts(self, posts: list[tuple[str, dict[str, Any]]], now: str) -> tuple[list[str], list[tuple[str, str]]]:
+        columns = (
+            "account_id", "platform", "publish_time", "title", "content_type", "content_source",
+            "tags_json", "note", "duration", "subjects_json", "hook_type", "views", "likes",
+            "comments", "favorites", "shares", "followers_gain", "profile_visits", "inquiries",
+            "platform_post_id",
+        )
+        inserted: list[str] = []
+        duplicates: list[tuple[str, str]] = []
+        with self._connect() as conn:
+            for post_id, values in posts:
+                duplicate_id = self._duplicate_query(conn, values)
+                if duplicate_id:
+                    duplicates.append((post_id, duplicate_id))
+                    continue
+                stored = dict(values)
+                stored["tags_json"] = json.dumps(stored.pop("tags", []), ensure_ascii=False)
+                stored["subjects_json"] = json.dumps(stored.pop("subjects", []), ensure_ascii=False)
+                conn.execute(
+                    f"INSERT INTO historical_posts (id, {', '.join(columns)}, created_at, updated_at) "
+                    f"VALUES ({', '.join('?' for _ in range(len(columns) + 3))})",
+                    (post_id, *(stored.get(column) for column in columns), now, now),
+                )
+                inserted.append(post_id)
+        return inserted, duplicates
+
+    def update_post(self, account_id: str, post_id: str, values: dict[str, Any], now: str) -> dict[str, Any] | None:
+        current = self.get_post(account_id, post_id)
+        if current is None:
+            return None
+        merged = {**current, **values, "account_id": account_id}
+        with self._connect() as conn:
+            duplicate_id = self._duplicate_query(conn, merged, exclude_id=post_id)
+            if duplicate_id:
+                return {"duplicate_id": duplicate_id}
+            assignments: list[str] = []
+            params: list[Any] = []
+            for key, value in values.items():
+                column = {"tags": "tags_json", "subjects": "subjects_json"}.get(key, key)
+                if key in {"tags", "subjects"}:
+                    value = json.dumps(value, ensure_ascii=False)
+                assignments.append(f"{column} = ?")
+                params.append(value)
+            assignments.append("updated_at = ?")
+            params.extend((now, account_id, post_id))
+            conn.execute(
+                f"UPDATE historical_posts SET {', '.join(assignments)} WHERE account_id = ? AND id = ?",
+                params,
+            )
+        return self.get_post(account_id, post_id)
+
+    def delete_post(self, account_id: str, post_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM historical_posts WHERE account_id = ? AND id = ?", (account_id, post_id)
+            )
+            return cursor.rowcount > 0
