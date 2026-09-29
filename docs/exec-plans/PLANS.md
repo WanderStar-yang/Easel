@@ -339,6 +339,44 @@ REVIEWING
 
 ---
 
+# 8.5 Phase 3.5 - Douyin Historical Data Acquisition
+
+## 目标
+
+低成本、可审阅地将用户本人抖音账号的历史作品事实数据同步到 `HistoricalPost`，同时保持数据来源可替换。只处理历史作品和平台实际展示的指标，不执行内容分类。
+
+## 复用与架构
+
+- Phase 2 `HistoricalImportService` 的行标准化、校验、重复检查、预览与确认写库；OpenAPI、Creator Center、CSV/XLSX 批量来源统一走 Preview → Confirm → Persist。手工表单在用户点击保存时确认后写入。
+- Phase 3 Intelligence Engine 继续只读取 `HistoricalPost`，不得直接耦合抖音 API 或浏览器。
+- 新增 `HistoricalDataSourceAdapter` 接口与 `DouyinOpenApiAdapter`、`DouyinCreatorCenterAdapter`、`FileImportAdapter`、`ManualInputAdapter`。OpenAPI 适配器以配置/授权占位接入 `video.list` 和 `video.data`；无正式密钥或权限时显示“尚未配置抖音开放平台权限”，不得返回伪造作品。
+- 现有 Easel 有 Playwright 登录态抓取，但未提供创作者中心用户主动查看页面的 DOM 读取通道。Creator Center 使用最小 Chrome Manifest V3 Browser Helper：仅响应用户在 `creator.douyin.com` 上的主动扫描操作，读取当前渲染的可见 DOM；用户翻页后可继续扫描并累计。扩展不得读凭证/Cookie、自动登录、绕过验证码或调用私有 API。若页面结构不匹配，显示无法识别并允许用户改用 CSV/人工录入。
+
+## 同步与数据规则
+
+- 业务 UI 先为指定 `douyin-pet` 创建一个限时同步会话；扩展检查当前标签页域名、会话状态并发送扫描结果。不得仅凭客户端 accountId 接受跨账号或过期会话。
+- 采集字段限于 platform_post_id、title、publish_time、duration、views/play_count、likes、comments、favorites、shares。不可见字段为 `null`；指标数值 `0` 保留为真实零值。
+- 采集过程不推断 REAL/AI、猫主体、Hook、Content Pillar、话题或其他分类；已有用户标签在更新时保留。
+- 抖音作品来源记录 `DOUYIN_OPEN_API`、`DOUYIN_CREATOR_CENTER`、`FILE_IMPORT` 或 `MANUAL`；同时记录 `source_updated_at`，账号级保存 `last_sync_at`。
+- 有 `platform_post_id` 时按账号范围 upsert 可变化的指标，不产生重复帖子；无作品 ID 时复用 Phase 2 (account_id, platform, publish_time, title) 去重。导入预览分别汇总扫描、新增、将更新、重复、缺字段及错误行。只有明确确认后才写库。既有 CSV/XLSX 手工导入重复仍可跳过，不覆盖。
+- 最近同步完成只显示数量并提供“重新运行首次诊断”；不自动执行 Phase 3 Diagnosis。完整度继续由 `HistoricalPostService.completeness()` 依据实际字段计算，不与来源绑定。
+
+## API / UI
+
+- 在现有历史帖子路由下增加开始同步会话、查询会话预览和 OpenAPI 配置状态端点；扩展上送可见 DOM 记录。预览结果最终通过同一 HistoricalImportService 和既有确认写入合同保存。
+- 抖音账号历史页主操作为“从抖音同步”，显示登录指引、扫描状态和最后同步来源/时间、新增/更新/重复计数；辅助保留 CSV/XLSX 导入和手动新增。确认预览后显示“历史数据已同步，共 XX 条”并链接主动重跑诊断。
+- 小红书 UI、数据入口和导入逻辑不变。Easel 的原有 `/api/accounts`、登录、发布能力与页面合同保持兼容。
+
+## 验收与测试
+
+- Creator Center 未登录、已登录、空列表、多页累计、缺失指标、实际零指标、错误 DOM 与扫描失败。
+- 同步来源、过期/跨账号会话隔离、平台作品 ID upsert、无 ID 重复规则、第二次同步的插入/更新、last_sync_at/source_updated_at。
+- Preview 阶段不写业务数据库；确认后原子持久化；Phase 3 可读取同步数据；小红书隔离。
+- CSV/XLSX 和人工 CRUD 回归，旧 `/api/accounts` 保持可用。
+- OpenAPI 无凭据/权限时只返回未配置状态。无授权环境时使用合成 DOM 样本测试适配器，不写死真实用户数据。
+
+---
+
 # 9. Phase 4 - Account Baseline
 
 ## 目标

@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Easel 抖音历史作品同步助手",
+  "version": "1.0.0",
+  "description": "仅在用户主动点击时读取抖音创作者中心当前页面可见的作品信息，并交给本地 Easel 预览。",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "https://creator.douyin.com/*",
+    "http://localhost:7860/*",
+    "http://127.0.0.1:7860/*"
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "同步到 Easel" }
+}

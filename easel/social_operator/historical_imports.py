@@ -14,6 +14,7 @@ import pandas as pd
 from .historical import InvalidHistoricalPostError, HistoricalPostService, _blank, normalize_post
 from .models import Platform
 from .repository import OperatorAccountRepository
+from .data_sources import FileImportAdapter
 
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 MAX_IMPORT_ROWS = 5000
@@ -101,6 +102,8 @@ class _Preview:
     records: list[dict]
     results: list[dict]
     summary: dict
+    source: str = "FILE_IMPORT"
+    update_existing: bool = False
 
 
 class HistoricalImportManager:
@@ -120,8 +123,14 @@ class HistoricalImportManager:
     def preview(self, account_id: str, filename: str, content: bytes) -> tuple[str, dict]:
         if len(content) > MAX_IMPORT_BYTES:
             raise ValueError("文件不能超过 10 MB")
-        platform = self.posts._account_platform(account_id)
         raw_rows, headers = read_import_file(filename, content)
+        adapted = FileImportAdapter().adapt(raw_rows)
+        return self.preview_records(account_id, adapted, headers=headers, source=FileImportAdapter.source)
+
+    def preview_records(self, account_id: str, raw_rows: list[dict], *, headers: list[str] | None = None,
+                        source: str, update_existing: bool = False) -> tuple[str, dict]:
+        platform = self.posts._account_platform(account_id)
+        headers = headers if headers is not None else list(dict.fromkeys(key for row in raw_rows for key in row))
         rows: list[dict] = []
         results: list[dict] = []
         missing: Counter = Counter()
@@ -136,7 +145,9 @@ class HistoricalImportManager:
         for index, raw in enumerate(raw_rows, start=2):
             mapped: dict = {}
             for header, value in raw.items():
-                target = _HEADER_ALIASES.get(_normalize_header(header))
+                target = _HEADER_ALIASES.get(_normalize_header(header),
+                                             header if header in {"platform_post_id", "publish_time", "title", "duration",
+                                                                  "views", "play_count", "likes", "comments", "favorites", "shares"} else None)
                 if target:
                     mapped[target] = value
             for field in required_metrics:
@@ -150,6 +161,8 @@ class HistoricalImportManager:
                 errors.update(exc.errors)
             normalized["account_id"] = account_id
             normalized["platform"] = platform.value
+            normalized["data_source"] = source
+            normalized["source_updated_at"] = datetime.now(timezone.utc).isoformat() if source != "MANUAL" else None
             duplicate_id = None
             if not errors:
                 if normalized.get("platform_post_id"):
@@ -163,7 +176,10 @@ class HistoricalImportManager:
                 elif key:
                     seen_keys.add(key)
                     duplicate_id = self.repository.find_duplicate(normalized)
-            status = "invalid" if errors else ("duplicate" if duplicate_id else "ready")
+            status = "invalid" if errors else (
+                "update" if duplicate_id and update_existing and normalized.get("platform_post_id")
+                else ("duplicate" if duplicate_id else "ready")
+            )
             rows.append(normalized if not errors else mapped)
             results.append({
                 "row": index,
@@ -174,7 +190,9 @@ class HistoricalImportManager:
             })
         summary = {
             "total_rows": len(raw_rows),
+            "scanned_count": len(raw_rows),
             "importable_count": sum(result["status"] == "ready" for result in results),
+            "update_count": sum(result["status"] == "update" for result in results),
             "error_count": sum(result["status"] == "invalid" for result in results),
             "duplicate_count": sum(result["status"] == "duplicate" for result in results),
             "missing_fields": [
@@ -189,7 +207,7 @@ class HistoricalImportManager:
         preview_id = str(uuid4())
         with self._lock:
             self._prune(now)
-            self._previews[preview_id] = _Preview(account_id, now, rows, results, summary)
+            self._previews[preview_id] = _Preview(account_id, now, rows, results, summary, source, update_existing)
         return preview_id, summary
 
     def confirm(self, account_id: str, preview_id: str) -> dict:
@@ -202,13 +220,32 @@ class HistoricalImportManager:
             valid_rows = [
                 (str(uuid4()), row)
                 for row, result in zip(preview.records, preview.results)
-                if result["status"] == "ready"
+                if result["status"] in {"ready", "update"}
             ]
-            inserted, duplicates = self.repository.create_posts(valid_rows, now.isoformat())
+            if preview.update_existing:
+                sync_result = self.repository.apply_sync_posts(
+                    account_id, valid_rows, now.isoformat(), source=preview.source,
+                    sync_counts={"scanned_count": preview.summary["scanned_count"],
+                                 "error_count": preview.summary["error_count"]},
+                )
+                inserted_count = sync_result["inserted_count"]
+                duplicate_count = sync_result["duplicate_count"] + preview.summary["duplicate_count"]
+                updated_count = sync_result["updated_count"]
+            else:
+                for _, row in valid_rows:
+                    row.setdefault("data_source", preview.source)
+                    row.setdefault("source_updated_at", now.isoformat())
+                inserted, duplicates = self.repository.create_posts(valid_rows, now.isoformat())
+                inserted_count = len(inserted)
+                duplicate_count = len(duplicates) + preview.summary["duplicate_count"]
+                updated_count = 0
             self._previews.pop(preview_id, None)
         return {
-            "imported_count": len(inserted),
-            "skipped_duplicate_count": len(duplicates) + preview.summary["duplicate_count"],
+            "imported_count": inserted_count,
+            "updated_count": updated_count,
+            "skipped_duplicate_count": duplicate_count,
             "error_count": preview.summary["error_count"],
-            "skipped_duplicate_ids": [existing_id for _, existing_id in duplicates],
+            "scanned_count": preview.summary["scanned_count"],
+            "data_source": preview.source,
+            "last_sync_at": now.isoformat() if preview.update_existing else None,
         }

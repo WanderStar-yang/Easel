@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from .models import ContentSource, HistoricalPost, Platform
+from .data_sources import ManualInputAdapter
 from .repository import AccountNotFoundError, OperatorAccountRepository
 
 POST_FIELDS = (
@@ -169,6 +170,7 @@ class HistoricalPostService:
             views=row["views"], likes=row["likes"], comments=row["comments"], favorites=row["favorites"],
             shares=row["shares"], followers_gain=row["followers_gain"], profile_visits=row["profile_visits"],
             inquiries=row["inquiries"], platform_post_id=row["platform_post_id"],
+            data_source=row.get("data_source", "MANUAL"), source_updated_at=row.get("source_updated_at"),
             created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
@@ -191,8 +193,11 @@ class HistoricalPostService:
 
     def create_post(self, account_id: str, values: dict) -> HistoricalPost:
         platform = self._account_platform(account_id)
+        values = ManualInputAdapter().adapt([values])[0]
         normalized = normalize_post(values, platform)
         normalized["account_id"] = account_id
+        normalized["data_source"] = "MANUAL"
+        normalized["source_updated_at"] = None
         post_id = str(uuid4())
         row = self.repository.create_post(post_id, normalized, self._now())
         if "duplicate_id" in row:

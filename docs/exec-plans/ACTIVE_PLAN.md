@@ -1,10 +1,10 @@
 # AI Social Operator V1 — Active Implementation Plan
 
-- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2 与 Phase 3 已完成；等待用户确认后再进入 Phase 4
+- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3 与 Phase 3.5 已完成；等待用户确认后再进入 Phase 4
 - 更新日期：2026-09-29
 - 源码基线：Easel `main` at `0cab7ca6f6e8286635d25fe2435dda11a975ffec`
 - 本计划依据：`../../AGENTS.md`、`../product-specs/AI_SOCIAL_OPERATOR_V1.md`、`PLANS.md`、`../audits/EASEL_V1_SOURCE_AUDIT.md` 及当前仓库源码
-- 本轮边界：Phase 3 Initial Diagnosis 已实现；未开始 Phase 4 Account Baseline 或 Strategy Recommendation
+- 本轮边界：Phase 3.5 历史数据采集已完成；未开始 Phase 4 Account Baseline 或 Strategy Recommendation
 
 ## 1. 文档与路径核对
 
@@ -113,6 +113,7 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 | 1 | 1 双账号基础模型 | Account、Profile/Strategy 关联、状态与隔离 | 使用 `easel/social_operator/` 业务服务、独立数据仓库、V1 API router；不复用登录账户模型 |
 | 2 | 2 历史数据导入 | 手工/CSV/XLSX 历史内容、校验和完整度 | 复用 `python-multipart`、上传/Outputs 与 pandas；新增 HistoricalPost 存储/API/UI；平台抓取不得成为前置依赖 |
 | 3 | 3 Intelligence Engine / Initial Diagnosis | 逐帖/分组分析和可追溯诊断报告 | 复用 `skills/shared/scripts/social_stats.py` 与 `skill-account-diagnosis` 框架；结构化样本、来源与置信度由业务服务提供 |
+| 3.5 | 3.5 Douyin Historical Data Acquisition | 官方 OpenAPI / 创作者中心辅助同步，统一预览确认和增量写入 | 增加来源 Adapter；复用 Phase 2 `HistoricalImportService`，Phase 3 引擎只消费 HistoricalPost；最小 Chrome MV3 DOM helper；OpenAPI 无权限时显示未配置 |
 | 4 | 4 Account Baseline | 账号级历史中位数/分组基线 | 复用 `social_stats.py`；存储 sampleSize、日期范围和快照版本 |
 | 5 | 5 Strategy Recommendation | 双账号独立定位、支柱、比例、实验建议 | 复用 `skill-strategy-advisor`/`skill-content-strategy` 的方法；定位仍为建议，不自动激活 |
 | 6 | 6 Strategy Confirmation | 修改、确认/退回、激活 Strategy | 独立策略版本、确认人/时间和服务端状态转换；未确认不 ACTIVE |
@@ -218,3 +219,35 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 - 新增 `tests/test_social_operator_diagnosis.py`：覆盖两平台、双账号隔离、0/1/2 条小样本、完整样本、部分缺失指标、Median、互动率公式、REAL/AI 与 content type 比较、Top/Low、置信度、低完整度、重启持久化、无解释模型降级、账号状态和 API；并验证 Phase 2 历史 API 与旧 Easel `/api/accounts` 仍可用。
 - 全量 Python Test：348 passed、6 skipped。`npm run build` 通过；诊断面板按需拆分为独立 chunk，主 chunk 低于 500 kB。`npm run lint` 通过，有两条既有 warning。`git diff --check` 和 Python compile 检查通过。无独立前端测试脚本。
 - Phase 3 输出具备进入 Phase 4 所需的真实历史统计和诊断证据；Baseline 不在本轮实现。Phase 4 仍等待用户确认，本记录不授权继续。
+
+## 11. Phase 3.5 执行记录：Douyin Historical Data Acquisition
+
+### Git 检查点与范围
+
+- Phase 3 验收实现独立 checkpoint：`a006e50`（`Checkpoint social operator Phase 3 initial diagnosis`）；提交前全量 Python Test 为 348 passed、6 skipped，前端 Build 通过，Lint 通过并有两条既有 warning。
+- 本轮只新增可审阅的抖音历史作品来源与增量同步；不创建 AccountBaseline、不生成 Strategy Recommendation，不改小红书数据入口。
+
+### 真实源码依据及实施方案
+
+- Phase 2 的 `easel/social_operator/historical_imports.py` 已实现统一行校验、account-scoped duplicate 检查、内存预览、显式确认后写库；扩展该服务以支持标准化 records 和平台 ID upsert，而不是创建第二套持久化通路。
+- Phase 3 `easel/social_operator/intelligence.py` 只需要规范 HistoricalPost。引入 Adapter 让诊断与来源解耦；来源标签为 `DOUYIN_OPEN_API`、`DOUYIN_CREATOR_CENTER`、`FILE_IMPORT`、`MANUAL`。文件来源/更新时间写在帖子；`last_sync_at` 与同步计数写入账号同步状态。
+- 当前 `web/app.py` 有 Playwright 创建/读取 Easel 自己持有的浏览器登录态的能力，但没有创作者中心当前标签页 DOM 的用户授权读取流程。Creator Center 采用小型 Chrome Manifest V3 扩展；扩展主动动作读取 `creator.douyin.com` 页面当前可见 DOM，不读取密码/Cookie、不自动登录，不绕过验证码、不请求私有接口。翻页由用户在页面操作后继续扫描并累计。
+- OpenAPI Adapter 读取正式环境配置与授权/权限状态；当前无 `client_key`、`client_secret` 或 `video.list`/`video.data` 权限时只提供“尚未配置抖音开放平台权限”状态和占位入口，不伪造 API 数据。
+- 网页 DOM 能力会因平台 UI 变化而失效；无匹配结构时报告错误并保留 CSV/XLSX、手动输入路径。真实抖音账号数据不可用于固定测试样本。
+
+### 同步合同
+
+- 仅采集 platform_post_id、title、publish_time、duration、views/play_count、likes、comments、favorites、shares；页面未显示字段设为 null、真实零保留为 0，不推断标签。
+- 主业务页面为抖音 Account 创建短时、account-scoped 同步会话。Browser Helper 校验官方域、用户触发动作与有效 session 后上送扫描记录；服务端预览显示扫描、新增、可更新/重复、缺字段和错误数。
+- OpenAPI、Creator Center、CSV/XLSX 批量来源先 Preview 再 Confirm；手工表单由用户点击保存确认。同步确认时有平台 ID 则更新可变指标并保留内容分类/用户标签，无平台 ID 则沿用 Phase 2 组合重复规则。只在确认时持久化并更新同步时间/计数；完成后提示用户主动重跑 Initial Diagnosis。
+- Completeness 延续基于 HistoricalPost 实际字段的既有算法，不按来源加分；CSV/XLSX 与手工 CRUD 维持原行为。
+
+### Phase 3.5 验收后停点
+
+- 覆盖未登录/已登录页面、空页、多页累积、空值与零值、ID upsert、重复、新增、预览无写入/确认落库、账号隔离、第二次同步、来源/时间戳、Phase 3 读取，以及 CSV/XLSX、旧 Easel API 回归。
+- 仅通过合成 DOM fixture 测扫描解析；当前没有可用 Chromium 浏览器和用户抖音创作者中心登录态，未对真实线上页面做手动扫描验证。需要首次使用时按 `browser-helpers/douyin-sync/README.md` 加载扩展。
+- OpenAPI 当前只是权限状态与申请入口占位；真实 OAuth 及 `video.list`/`video.data` 尚未实现。当前 `.env` 没有 `DOUYIN_CLIENT_KEY`、`DOUYIN_CLIENT_SECRET` 或权限确认配置，因此页面明确回落到 Creator Center 辅助同步。
+- `python -m pytest -q`：359 passed、6 skipped（既有跳过项）。`node --test tests/browser-helper/douyin-sync.test.js`：2 passed，覆盖登录提示、空列表、多作品、分页合并、缺失指标与零值；扩展脚本 `node --check` 通过。
+- `npm run build`（含 `tsc -b`）通过；`npm run lint` 通过并保留两条既有 warning；`git diff --check` 通过。未新增依赖；Phase 2 CSV/XLSX、手工 CRUD、Phase 3 Diagnosis 和旧 `/api/accounts` 回归均通过。
+- Phase 3.5 后续用户可在未配置 OpenAPI 时使用 Chrome Creator Center 辅助同步，也可继续 CSV/XLSX/手工录入；Phase 3 Diagnosis 可读取其确认写入的 `HistoricalPost`。数据模型与服务前置已具备进入 Phase 4 的条件；真实账号 DOM 适配仍需用户在首次使用时确认页面扫描可读。
+- 本 Phase 已结束。本记录不授权进入 Phase 4；需用户单独确认。

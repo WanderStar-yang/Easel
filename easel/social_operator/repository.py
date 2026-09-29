@@ -45,6 +45,9 @@ class OperatorAccountRepository:
                         'STRATEGY_PENDING_CONFIRMATION', 'ACTIVE', 'REVIEWING'
                     )),
                     diagnosis_completed_at TEXT,
+                    last_sync_at TEXT,
+                    last_sync_source TEXT,
+                    last_sync_counts_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -85,6 +88,8 @@ class OperatorAccountRepository:
                     profile_visits INTEGER CHECK (profile_visits IS NULL OR profile_visits >= 0),
                     inquiries INTEGER CHECK (inquiries IS NULL OR inquiries >= 0),
                     platform_post_id TEXT,
+                    data_source TEXT NOT NULL DEFAULT 'MANUAL',
+                    source_updated_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -102,9 +107,22 @@ class OperatorAccountRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_account_diagnoses_latest
                     ON account_diagnoses(account_id, generated_at DESC, id DESC);
-                PRAGMA user_version = 3;
                 """
             )
+            # Additive migration: preserve databases created by the Phase 1–3 schemas.
+            account_columns = {row["name"] for row in conn.execute("PRAGMA table_info(operator_accounts)")}
+            if "last_sync_at" not in account_columns:
+                conn.execute("ALTER TABLE operator_accounts ADD COLUMN last_sync_at TEXT")
+            if "last_sync_source" not in account_columns:
+                conn.execute("ALTER TABLE operator_accounts ADD COLUMN last_sync_source TEXT")
+            if "last_sync_counts_json" not in account_columns:
+                conn.execute("ALTER TABLE operator_accounts ADD COLUMN last_sync_counts_json TEXT NOT NULL DEFAULT '{}'")
+            post_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_posts)")}
+            if "data_source" not in post_columns:
+                conn.execute("ALTER TABLE historical_posts ADD COLUMN data_source TEXT NOT NULL DEFAULT 'MANUAL'")
+            if "source_updated_at" not in post_columns:
+                conn.execute("ALTER TABLE historical_posts ADD COLUMN source_updated_at TEXT")
+            conn.execute("PRAGMA user_version = 4")
 
     def seed_defaults(self, now: str) -> None:
         seeds = (
@@ -239,6 +257,27 @@ class OperatorAccountRepository:
                                (account_id,)).fetchone()
         return int(row["total"])
 
+    def get_sync_status(self, account_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT last_sync_at, last_sync_source, last_sync_counts_json "
+                "FROM operator_accounts WHERE id = ?", (account_id,),
+            ).fetchone()
+        if row is None:
+            raise AccountNotFoundError(account_id)
+        return {"last_sync_at": row["last_sync_at"], "last_sync_source": row["last_sync_source"],
+                "last_sync_counts": json.loads(row["last_sync_counts_json"] or "{}")}
+
+    def record_sync(self, account_id: str, source: str, counts: dict[str, int], synced_at: str) -> None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE operator_accounts SET last_sync_at = ?, last_sync_source = ?, "
+                "last_sync_counts_json = ?, updated_at = ? WHERE id = ?",
+                (synced_at, source, json.dumps(counts), synced_at, account_id),
+            )
+            if cursor.rowcount == 0:
+                raise AccountNotFoundError(account_id)
+
     def get_post(self, account_id: str, post_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -279,7 +318,7 @@ class OperatorAccountRepository:
             "account_id", "platform", "publish_time", "title", "content_type", "content_source",
             "tags_json", "note", "duration", "subjects_json", "hook_type", "views", "likes",
             "comments", "favorites", "shares", "followers_gain", "profile_visits", "inquiries",
-            "platform_post_id",
+            "platform_post_id", "data_source", "source_updated_at",
         )
         inserted: list[str] = []
         duplicates: list[tuple[str, str]] = []
@@ -299,6 +338,66 @@ class OperatorAccountRepository:
                 )
                 inserted.append(post_id)
         return inserted, duplicates
+
+    def apply_sync_posts(self, account_id: str, posts: list[tuple[str, dict[str, Any]]], now: str, *,
+                         source: str, sync_counts: dict[str, int]) -> dict[str, Any]:
+        """Account-scoped insert/update for a user-confirmed sync preview."""
+        inserted = updated = duplicate_count = 0
+        updated_ids: list[str] = []
+        inserted_ids: list[str] = []
+        metric_fields = ("views", "likes", "comments", "favorites", "shares")
+        columns = (
+            "account_id", "platform", "publish_time", "title", "content_type", "content_source",
+            "tags_json", "note", "duration", "subjects_json", "hook_type", "views", "likes",
+            "comments", "favorites", "shares", "followers_gain", "profile_visits", "inquiries",
+            "platform_post_id", "data_source", "source_updated_at",
+        )
+        with self._connect() as conn:
+            for post_id, source_values in posts:
+                values = {**source_values, "account_id": account_id}
+                existing = None
+                if values.get("platform_post_id"):
+                    existing = conn.execute(
+                        "SELECT id FROM historical_posts WHERE account_id = ? AND platform_post_id = ?",
+                        (account_id, values["platform_post_id"]),
+                    ).fetchone()
+                if existing:
+                    updates = {key: values.get(key) for key in metric_fields if values.get(key) is not None}
+                    updates.update({"data_source": values.get("data_source", "DOUYIN_CREATOR_CENTER"),
+                                    "source_updated_at": values.get("source_updated_at")})
+                    assignments = ", ".join(f"{key} = ?" for key in updates)
+                    conn.execute(
+                        f"UPDATE historical_posts SET {assignments}, updated_at = ? WHERE account_id = ? AND id = ?",
+                        (*updates.values(), now, account_id, existing["id"]),
+                    )
+                    updated += 1
+                    updated_ids.append(existing["id"])
+                    continue
+                duplicate_id = self._duplicate_query(conn, values)
+                if duplicate_id:
+                    duplicate_count += 1
+                    continue
+                stored = dict(values)
+                stored["tags_json"] = json.dumps(stored.pop("tags", []), ensure_ascii=False)
+                stored["subjects_json"] = json.dumps(stored.pop("subjects", []), ensure_ascii=False)
+                conn.execute(
+                    f"INSERT INTO historical_posts (id, {', '.join(columns)}, created_at, updated_at) "
+                    f"VALUES ({', '.join('?' for _ in range(len(columns) + 3))})",
+                    (post_id, *(stored.get(column) for column in columns), now, now),
+                )
+                inserted += 1
+                inserted_ids.append(post_id)
+            counts = {**sync_counts, "inserted_count": inserted, "updated_count": updated,
+                      "duplicate_count": duplicate_count}
+            cursor = conn.execute(
+                "UPDATE operator_accounts SET last_sync_at = ?, last_sync_source = ?, "
+                "last_sync_counts_json = ?, updated_at = ? WHERE id = ?",
+                (now, source, json.dumps(counts), now, account_id),
+            )
+            if cursor.rowcount == 0:
+                raise AccountNotFoundError(account_id)
+        return {"inserted_count": inserted, "updated_count": updated, "duplicate_count": duplicate_count,
+                "inserted_ids": inserted_ids, "updated_ids": updated_ids}
 
     def update_post(self, account_id: str, post_id: str, values: dict[str, Any], now: str) -> dict[str, Any] | None:
         current = self.get_post(account_id, post_id)

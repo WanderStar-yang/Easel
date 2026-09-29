@@ -471,6 +471,8 @@ export interface HistoricalPost {
   profile_visits: number | null;
   inquiries: number | null;
   platform_post_id: string | null;
+  data_source: 'DOUYIN_OPEN_API' | 'DOUYIN_CREATOR_CENTER' | 'FILE_IMPORT' | 'MANUAL';
+  source_updated_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -516,14 +518,16 @@ export interface HistoricalCompleteness {
 export interface HistoricalImportPreview {
   preview_id: string;
   total_rows: number;
+  scanned_count?: number;
   importable_count: number;
+  update_count?: number;
   error_count: number;
   duplicate_count: number;
   missing_fields: Array<{ field: string; missing_rows: number; column_missing: boolean }>;
   headers: string[];
   rows: Array<{
     row: number;
-    status: 'ready' | 'invalid' | 'duplicate';
+    status: 'ready' | 'update' | 'invalid' | 'duplicate';
     errors: Record<string, string>;
     duplicate_of: string | null;
     record: Record<string, unknown>;
@@ -625,10 +629,47 @@ export function previewHistoricalImport(accountId: string, file: File): Promise<
 
 export function confirmHistoricalImport(
   accountId: string, previewId: string,
-): Promise<{ imported_count: number; skipped_duplicate_count: number; error_count: number }> {
-  return request<{ imported_count: number; skipped_duplicate_count: number; error_count: number }>(`${operatorPostsPath(accountId)}/imports/confirm`, {
+): Promise<{ imported_count: number; updated_count: number; skipped_duplicate_count: number; error_count: number; scanned_count: number; data_source: string; last_sync_at: string | null }> {
+  return request<{ imported_count: number; updated_count: number; skipped_duplicate_count: number; error_count: number; scanned_count: number; data_source: string; last_sync_at: string | null }>(`${operatorPostsPath(accountId)}/imports/confirm`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preview_id: previewId }),
   });
+}
+
+export interface HistoricalSyncStatus {
+  last_sync_at: string | null;
+  last_sync_source: string | null;
+  last_sync_counts: Record<string, number>;
+}
+
+export interface CreatorCenterSyncSession {
+  session_id: string;
+  expires_at: string;
+  status: 'waiting_for_scan' | 'preview_ready';
+  preview_id?: string | null;
+  preview?: HistoricalImportPreview | null;
+}
+
+export interface DouyinOpenApiStatus {
+  configured: boolean;
+  missing_configuration: string[];
+  required_permissions: string[];
+  message: string;
+}
+
+export function getHistoricalSyncStatus(accountId: string): Promise<HistoricalSyncStatus> {
+  return request<HistoricalSyncStatus>(`${operatorPostsPath(accountId)}/sync/status`);
+}
+
+export function getDouyinOpenApiStatus(accountId: string): Promise<DouyinOpenApiStatus> {
+  return request<DouyinOpenApiStatus>(`${operatorPostsPath(accountId)}/sync/openapi-status`);
+}
+
+export function createCreatorCenterSyncSession(accountId: string): Promise<CreatorCenterSyncSession> {
+  return request<CreatorCenterSyncSession>(`${operatorPostsPath(accountId)}/sync/sessions`, { method: 'POST' });
+}
+
+export function getCreatorCenterSyncSession(accountId: string, sessionId: string): Promise<CreatorCenterSyncSession> {
+  return request<CreatorCenterSyncSession>(`${operatorPostsPath(accountId)}/sync/sessions/${encodeURIComponent(sessionId)}`);
 }
 
 export function runAccountDiagnosis(accountId: string): Promise<AccountDiagnosisReport> {

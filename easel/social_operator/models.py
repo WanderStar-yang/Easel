@@ -27,6 +27,13 @@ class ContentSource(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class HistoricalDataSource(str, Enum):
+    DOUYIN_OPEN_API = "DOUYIN_OPEN_API"
+    DOUYIN_CREATOR_CENTER = "DOUYIN_CREATOR_CENTER"
+    FILE_IMPORT = "FILE_IMPORT"
+    MANUAL = "MANUAL"
+
+
 @dataclass(frozen=True)
 class OperatorProfile:
     id: str
@@ -101,6 +108,8 @@ class HistoricalPost:
     profile_visits: int | None
     inquiries: int | None
     platform_post_id: str | None
+    data_source: str
+    source_updated_at: str | None
     created_at: str
     updated_at: str
 
@@ -128,6 +137,8 @@ class HistoricalPost:
             "profile_visits": self.profile_visits,
             "inquiries": self.inquiries,
             "platform_post_id": self.platform_post_id,
+            "data_source": self.data_source,
+            "source_updated_at": self.source_updated_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

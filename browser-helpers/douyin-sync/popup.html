@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Easel 抖音同步</title>
+  <style>
+    body { width: 340px; margin: 0; padding: 16px; color: #202124; font: 14px/1.5 system-ui, sans-serif; }
+    h1 { margin: 0 0 12px; font-size: 17px; }
+    label { display: block; margin: 10px 0 4px; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid #c8cbd0; border-radius: 6px; }
+    button { width: 100%; margin-top: 9px; padding: 9px; border: 0; border-radius: 6px; background: #315efb; color: #fff; font-weight: 600; cursor: pointer; }
+    button.secondary { background: #eef1f6; color: #202124; }
+    button:disabled { opacity: .55; cursor: wait; }
+    #status { margin-top: 12px; min-height: 40px; color: #50545a; white-space: pre-wrap; }
+    .hint { margin-top: 12px; color: #666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Easel 抖音历史作品同步</h1>
+  <label for="session">Easel 同步会话</label>
+  <input id="session" autocomplete="off" placeholder="从 Easel 复制短时会话码">
+  <label for="base">Easel 本地地址</label>
+  <input id="base" value="http://localhost:7860" autocomplete="off">
+  <button id="scan" class="secondary">扫描当前页并累计</button>
+  <button id="submit">生成导入预览</button>
+  <div id="status" role="status">请先在 Easel 创建同步会话，并在当前标签页打开已登录的抖音创作者中心。</div>
+  <div class="hint">助手只读取当前页已显示的信息。翻页或滚动加载后可再次扫描；未提交前数据只暂存在此浏览器扩展中。</div>
+  <script src="merge.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

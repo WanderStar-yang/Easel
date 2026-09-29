@@ -270,19 +270,30 @@ V1 为 B 级自动化。
 
 # 6. 历史数据导入
 
-V1 不要求必须依赖平台开放 API。
+历史内容统一转换为 `HistoricalPost`，分析引擎不得依赖某一种来源。批量采集与文件导入必须经过：
 
-首先保证可以完成历史分析。
+```text
+读取 → 标准化 → Preview → 用户确认 → Persist
+```
 
-支持：
+CSV/XLSX 与人工录入继续保留。抖音 V1 数据来源优先级为：
 
-1. 人工录入
-2. CSV / Excel 导入
-3. 后续如现有 Easel / 平台能力允许，再增加自动同步
+1. 抖音官方 OpenAPI（用户授权且权限可用时）
+2. 抖音创作者中心辅助同步
+3. CSV/XLSX 导入
+4. 人工录入
 
-原则：
+小红书继续使用 CSV/XLSX 与人工录入；本阶段不开发小红书自动采集。
 
-> 自动同步缺失不能阻塞 V1 核心运营闭环。
+## 6.1 历史数据来源适配器
+
+通过 `HistoricalDataSourceAdapter` 将不同来源映射为统一 `HistoricalPost`。首期适配器包括 `DouyinOpenApiAdapter`、`DouyinCreatorCenterAdapter`、`FileImportAdapter` 和 `ManualInputAdapter`。适配器负责事实字段的标准化，不做 AI 内容分类。人工表单由用户点击保存作为确认后写入；OpenAPI、创作者中心、CSV/XLSX 批量数据须进入统一预览后由用户确认。
+
+抖音 OpenAPI 后续接入 `video.list` 与 `video.data`，支持用户授权、分页和作品指标读取。未配置 `client_key`、`client_secret` 或所需权限时，必须显示“尚未配置抖音开放平台权限”，不得伪造结果。
+
+创作者中心辅助同步使用浏览器页面上用户已登录并主动打开的可见 DOM。它不得获取账号密码或 Cookie、自动登录、绕过验证码、调用逆向私有 API、自动发布或互动。不可读取的字段保持空值；真实的零值保留为 `0`，不可将缺失指标填成 `0`。扫描阶段只提取作品 ID、标题、发布时间、时长和页面实际展示的播放/点赞/评论/收藏/分享数据，不推断主体、内容来源、Hook 或 Content Pillar。
+
+抖音重复同步时优先以 `accountId + platformPostId` 更新可变化指标，不重复新建作品；缺少作品 ID 时沿用 Phase 2 的账号、平台、发布时间和标题规则。每条作品记录来源及来源更新时间，账号记录最近同步时间。文件导入、页面扫描与 OpenAPI 均共用同一个 Preview、校验、去重/更新和确认写入流程。同步完成不自动运行 Diagnosis，用户需主动重新诊断。
 
 ---
 
@@ -1072,6 +1083,7 @@ Phase 0  Easel 源码审计
 Phase 1  双账号基础模型
 Phase 2  历史数据导入
 Phase 3  Account Intelligence Engine / Initial Diagnosis
+Phase 3.5  Douyin Historical Data Acquisition
 Phase 4  Account Baseline
 Phase 5  Strategy Recommendation
 Phase 6  Strategy Confirmation

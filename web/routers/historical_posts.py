@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -14,7 +14,9 @@ from easel.social_operator.historical import (
     InvalidHistoricalPostError,
 )
 from easel.social_operator.historical_imports import MAX_IMPORT_BYTES, HistoricalImportManager
-from easel.social_operator.models import ContentSource
+from easel.social_operator.historical_sync import HistoricalSyncSessionManager
+from easel.social_operator.data_sources import DouyinCreatorCenterAdapter, DouyinOpenApiAdapter
+from easel.social_operator.models import ContentSource, Platform
 from easel.social_operator.repository import AccountNotFoundError, OperatorAccountRepository
 from easel.social_operator.service import OperatorAccountService
 
@@ -26,6 +28,7 @@ class HistoricalServices:
     accounts: OperatorAccountService
     posts: HistoricalPostService
     imports: HistoricalImportManager
+    sync_sessions: HistoricalSyncSessionManager = field(default_factory=HistoricalSyncSessionManager)
 
 
 @lru_cache(maxsize=1)
@@ -33,7 +36,8 @@ def get_historical_services() -> HistoricalServices:
     repository = OperatorAccountRepository()
     accounts = OperatorAccountService(repository)
     posts = HistoricalPostService(repository)
-    return HistoricalServices(accounts, posts, HistoricalImportManager(posts, repository))
+    return HistoricalServices(accounts, posts, HistoricalImportManager(posts, repository),
+                              HistoricalSyncSessionManager())
 
 
 class _PostModel(BaseModel):
@@ -177,6 +181,70 @@ async def preview_import(account_id: str, file: UploadFile = File(...),
 
 class ImportConfirm(BaseModel):
     preview_id: str
+
+
+class CreatorCenterPreview(BaseModel):
+    source_url: str
+    records: list[dict] = Field(max_length=5000)
+
+
+@router.get("/sync/status")
+def get_sync_status(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    return services.posts.repository.get_sync_status(account_id)
+
+
+@router.get("/sync/openapi-status")
+def get_openapi_status(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    account = services.accounts.get_account(account_id)
+    if account.platform != Platform.DOUYIN:
+        raise HTTPException(status_code=409, detail="官方数据采集入口仅适用于抖音账号")
+    return DouyinOpenApiAdapter.configuration_status()
+
+
+@router.post("/sync/sessions", status_code=201)
+def create_sync_session(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    account = services.accounts.get_account(account_id)
+    if account.platform != Platform.DOUYIN:
+        raise HTTPException(status_code=409, detail="创作者中心辅助同步仅适用于抖音账号")
+    return services.sync_sessions.create(account_id)
+
+
+@router.get("/sync/sessions/{session_id}")
+def get_sync_session(account_id: str, session_id: str,
+                     services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    try:
+        return services.sync_sessions.get(account_id, session_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="同步会话不存在、已过期或不属于当前账号") from exc
+
+
+@router.post("/sync/sessions/{session_id}/preview", status_code=201)
+def preview_creator_center_sync(account_id: str, session_id: str, payload: CreatorCenterPreview,
+                                services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    account = services.accounts.get_account(account_id)
+    if account.platform != Platform.DOUYIN:
+        raise HTTPException(status_code=409, detail="创作者中心辅助同步仅适用于抖音账号")
+    if not services.sync_sessions.validate_creator_center_url(payload.source_url):
+        raise HTTPException(status_code=403, detail="只接受从抖音创作者中心页面主动扫描的数据")
+    try:
+        adapter = DouyinCreatorCenterAdapter()
+        preview_id, summary = services.imports.preview_records(
+            account_id, adapter.adapt(payload.records), source=adapter.source, update_existing=True,
+        )
+        return services.sync_sessions.attach_preview(
+            account_id, session_id, preview_id, {"preview_id": preview_id, **summary}, payload.source_url,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="同步会话不存在、已过期或不属于当前账号") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/imports/confirm")

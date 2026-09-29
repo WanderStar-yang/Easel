@@ -6,9 +6,9 @@ import {
 } from '../lib/api';
 import type { AccountItem, AccountWhoami, OperatorAccount } from '../lib/api';
 import { getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
-import HistoricalPostsPanel from './HistoricalPostsPanel';
 
 const AccountDiagnosisPanel = lazy(() => import('./AccountDiagnosisPanel'));
+const HistoricalPostsPanel = lazy(() => import('./HistoricalPostsPanel'));
 
 type QRState = {
   platform: string;
@@ -344,7 +344,12 @@ export default function AccountsPage() {
             </article>
           ))}
         </div>
-        {historyAccount && <HistoricalPostsPanel account={historyAccount} onClose={() => setHistoryAccount(null)} />}
+        {historyAccount && (
+          <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载历史内容…</div>}>
+            <HistoricalPostsPanel account={historyAccount} onClose={() => setHistoryAccount(null)}
+              onRunDiagnosis={() => { setHistoryAccount(null); setDiagnosisAccount(historyAccount); }} />
+          </Suspense>
+        )}
         {diagnosisAccount && (
           <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载诊断报告…</div>}>
             <AccountDiagnosisPanel account={diagnosisAccount} onClose={() => setDiagnosisAccount(null)} />
