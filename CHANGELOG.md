@@ -2,6 +2,12 @@
 
 All notable changes to Easel are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Added isolated Social Operator business accounts for Douyin and Xiaohongshu, with per-account Profile and Strategy records, a server-validated lifecycle, an `/api/operator/accounts` API, and a separate business-account section on the Accounts page. The platform-login account API remains unchanged.
+
 ## [0.2.1] - 2026-09-24
 
 ### Added

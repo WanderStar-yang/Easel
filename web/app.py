@@ -27,6 +27,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
+from web.routers.operator_accounts import router as operator_accounts_router
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -425,6 +426,7 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Easel", docs_url=None, redoc_url=None, lifespan=_lifespan)
+app.include_router(operator_accounts_router)
 
 def _local_ports(env_port: str) -> set[str]:
     """本机写守卫放行的端口集合：固定的 7860/7870/5173，加上 `--port`/EASEL_PORT
@@ -2810,7 +2812,7 @@ async def api_media(path: str):
 
 
 # 系统数据目录/文件——不允许从内容库删除（删了会丢登录态/日历/发布记录）
-PROTECTED_OUTPUTS = {"_login", "_analytics", "_schedule.json", "_ideas.json",
+PROTECTED_OUTPUTS = {"_login", "_analytics", "_social_operator.sqlite3", "_schedule.json", "_ideas.json",
                      "_publish", "_publish.log", "_sessions", "_profile_build", "_debug", "_inbox"}
 UPLOAD_EXTS = IMAGE_EXTS | VIDEO_EXTS | {
     ".pdf", ".txt", ".md", ".markdown", ".csv", ".json", ".srt", ".vtt",

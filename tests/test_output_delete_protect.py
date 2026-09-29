@@ -16,6 +16,7 @@ def test_underscore_sessions_and_profile_build_are_protected():
     assert web._is_protected(root / "_sessions" / "abc.json") is True
     assert web._is_protected(root / "_profile_build" / "job.json") is True
     assert web._is_protected(root / "_login" / "xhs.json") is True
+    assert web._is_protected(root / "_social_operator.sqlite3") is True
     assert web._is_protected(root / "_debug" / "trace.log") is True
     assert web._is_protected(root / "analytics" / "x.json") is True
 

@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   fetchAccounts, startLogin, loginStatus, mediaUrl,
   accountWhoami, logoutAccount, submitLoginSms,
-  saveCredentials, getCredentials, startMpLogin, mpLoginStatus,
+  saveCredentials, getCredentials, startMpLogin, mpLoginStatus, fetchOperatorAccounts,
 } from '../lib/api';
-import type { AccountItem, AccountWhoami } from '../lib/api';
+import type { AccountItem, AccountWhoami, OperatorAccount } from '../lib/api';
 import { getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
 
 type QRState = {
@@ -41,6 +41,8 @@ function Avatar({ url, name }: { url?: string; name: string }) {
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
+  const [operatorAccounts, setOperatorAccounts] = useState<OperatorAccount[]>([]);
+  const [operatorAccountsErr, setOperatorAccountsErr] = useState('');
   const [err, setErr] = useState('');
   const [qr, setQr] = useState<QRState | null>(null);
   const [qrNonce, setQrNonce] = useState(0);   // 每次登录 +1，稳定缓存 key，避免每次轮询 img 闪烁
@@ -97,6 +99,12 @@ export default function AccountsPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    fetchOperatorAccounts()
+      .then(setOperatorAccounts)
+      .catch(() => setOperatorAccountsErr('加载业务运营账号失败'));
+  }, []);
 
   // 切回本标签页 / 窗口重新获得焦点时自动重拉账号态——登录/退出后即使漏了一次刷新，切回来也是最新的，
   // 用户无需手动刷新页面。（登录中弹着二维码时不打扰，避免打断轮询。）
@@ -293,6 +301,40 @@ export default function AccountsPage() {
       {terminalMsg && (
         <div className="card" style={{ padding: 13, fontSize: 13, marginTop: 14 }}>{terminalMsg}</div>
       )}
+
+      <section style={{ marginTop: 24, marginBottom: 30 }} aria-labelledby="operator-accounts-title">
+        <h2 id="operator-accounts-title" style={{ fontSize: 18, margin: '0 0 6px' }}>业务运营账号</h2>
+        <p className="page-subtitle" style={{ margin: '0 0 14px' }}>
+          V1 运营对象，与下方的平台登录连接分别管理。初始定位和策略仍是待验证假设。
+        </p>
+        {operatorAccountsErr && <div role="alert" style={{ color: 'var(--red)', fontSize: 13 }}>{operatorAccountsErr}</div>}
+        <div className="accounts-grid">
+          {operatorAccounts.map((account) => (
+            <article key={account.id} className="card account-card" aria-label={account.name}>
+              <div className="account-card-head">
+                <span className="account-card-name">{account.name}</span>
+                <span className={`badge ${account.status === 'ACTIVE' ? 'badge-ok' : ''}`}>
+                  {account.status}
+                </span>
+              </div>
+              <div className="account-card-note" style={{ marginTop: 10 }}>
+                平台：{account.platform === 'douyin' ? '抖音' : '小红书'}
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 10 }}>
+                <strong>Profile</strong><br />{account.profile.summary || '尚未填写'}
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 10 }}>
+                <strong>Strategy</strong><br />{account.strategy.summary || '尚未填写'}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <h2 style={{ fontSize: 18, margin: '0 0 6px' }}>平台登录连接</h2>
+      <p className="page-subtitle" style={{ margin: '0 0 14px' }}>
+        Easel 平台登录状态，用于现有登录与发布能力；它不是 V1 业务运营账号。
+      </p>
 
       <div className="accounts-grid">
         {accounts.map((a) => {

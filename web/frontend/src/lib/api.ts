@@ -428,6 +428,26 @@ export function fetchAccounts(): Promise<AccountItem[]> {
   return request<AccountItem[]>('/api/accounts');
 }
 
+// ---- Social Operator business accounts (separate from platform login accounts) ----
+export type OperatorAccountStatus =
+  | 'NEW' | 'IMPORTING' | 'DIAGNOSING'
+  | 'STRATEGY_PENDING_CONFIRMATION' | 'ACTIVE' | 'REVIEWING';
+
+export interface OperatorAccount {
+  id: string;
+  name: string;
+  platform: 'douyin' | 'xiaohongshu';
+  status: OperatorAccountStatus;
+  profile: { id: string; summary: string; easelProfileName: string | null };
+  strategy: { id: string; summary: string; state: string; confirmedAt: string | null };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function fetchOperatorAccounts(): Promise<OperatorAccount[]> {
+  return request<OperatorAccount[]>('/api/operator/accounts');
+}
+
 export interface AccountWhoami {
   loggedIn: boolean;
   name: string;
