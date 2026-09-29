@@ -28,6 +28,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from web.routers.historical_posts import router as historical_posts_router
+from web.routers.operator_diagnosis import router as operator_diagnosis_router
 from web.routers.operator_accounts import router as operator_accounts_router
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -429,6 +430,7 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="Easel", docs_url=None, redoc_url=None, lifespan=_lifespan)
 app.include_router(operator_accounts_router)
 app.include_router(historical_posts_router)
+app.include_router(operator_diagnosis_router)
 
 def _local_ports(env_port: str) -> set[str]:
     """本机写守卫放行的端口集合：固定的 7860/7870/5173，加上 `--port`/EASEL_PORT

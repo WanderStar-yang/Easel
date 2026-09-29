@@ -531,6 +531,60 @@ export interface HistoricalImportPreview {
   preview_truncated: boolean;
 }
 
+export interface AccountDiagnosisReport {
+  id: string;
+  account_id: string;
+  algorithm_version: string;
+  generated_at: string;
+  status: string;
+  platform: 'douyin' | 'xiaohongshu';
+  account: { id: string; name: string; platform: string; status: string };
+  overview: string;
+  account_context: {
+    profile_summary: string;
+    strategy_summary: string;
+    strategy_state: string | null;
+    strategy_is_initial_hypothesis: boolean;
+    used_as_conclusion_source: false;
+  };
+  input_evidence: {
+    historical_post_ids: string[];
+    historical_post_versions: Array<{ id: string; updated_at: string }>;
+    sample_size: number;
+    algorithm_version: string;
+  };
+  data_quality: {
+    sample_size: number;
+    completeness: HistoricalCompleteness;
+    metric_coverage: Record<string, { available: number; sample_size: number; coverage: number }>;
+    overall_metric_coverage: number;
+    confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+    confidence_rules: Record<string, string>;
+  };
+  content_distribution: Record<string, Record<string, number>>;
+  metric_summary: Record<string, unknown>;
+  top_posts: Array<Record<string, unknown>>;
+  low_posts: Array<Record<string, unknown>>;
+  pattern_findings: Array<{
+    dimension: string; pattern: string; sample_a: number; sample_b: number; metric: string;
+    value_a: number; value_b: number; difference_percent: number; direction: string;
+    confidence: 'HIGH' | 'MEDIUM' | 'LOW'; evidence_post_ids_a: string[]; evidence_post_ids_b: string[];
+  }>;
+  strengths: string[];
+  problems: string[];
+  opportunities: string[];
+  insufficient_data: string[];
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  ranking_rule: string;
+  engagement_rate_formula: string;
+  ai_explanation: { status: 'available' | 'unavailable'; provider: string | null; summary: string | null; reason: string | null };
+  save_value_signal?: {
+    observed: boolean; favorites_median?: number | null; views_median?: number | null;
+    favorites_to_views_median?: number; sample_size?: number; formula?: string; note: string;
+  };
+  ip_business_signals?: { profile_visits_median: number | null; inquiries_median: number | null; interpretation: string };
+}
+
 function operatorPostsPath(accountId: string): string {
   return `/api/operator/accounts/${encodeURIComponent(accountId)}/posts`;
 }
@@ -575,6 +629,18 @@ export function confirmHistoricalImport(
   return request<{ imported_count: number; skipped_duplicate_count: number; error_count: number }>(`${operatorPostsPath(accountId)}/imports/confirm`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preview_id: previewId }),
   });
+}
+
+export function runAccountDiagnosis(accountId: string): Promise<AccountDiagnosisReport> {
+  return request<AccountDiagnosisReport>(`/api/operator/accounts/${encodeURIComponent(accountId)}/diagnosis`, { method: 'POST' });
+}
+
+export function fetchLatestDiagnosis(accountId: string): Promise<AccountDiagnosisReport> {
+  return request<AccountDiagnosisReport>(`/api/operator/accounts/${encodeURIComponent(accountId)}/diagnosis`);
+}
+
+export function fetchDiagnosisHistory(accountId: string): Promise<AccountDiagnosisReport[]> {
+  return request<AccountDiagnosisReport[]>(`/api/operator/accounts/${encodeURIComponent(accountId)}/diagnosis/history`);
 }
 
 export interface AccountWhoami {

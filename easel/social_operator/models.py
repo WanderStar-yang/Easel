@@ -131,3 +131,21 @@ class HistoricalPost:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+
+@dataclass(frozen=True)
+class AccountDiagnosis:
+    id: str
+    account_id: str
+    generated_at: str
+    algorithm_version: str
+    report: dict[str, object]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "account_id": self.account_id,
+            "generated_at": self.generated_at,
+            "algorithm_version": self.algorithm_version,
+            **self.report,
+        }

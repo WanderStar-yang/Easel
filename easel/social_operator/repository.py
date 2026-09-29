@@ -93,7 +93,16 @@ class OperatorAccountRepository:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_historical_posts_platform_id
                     ON historical_posts(account_id, platform_post_id)
                     WHERE platform_post_id IS NOT NULL AND platform_post_id != '';
-                PRAGMA user_version = 2;
+                CREATE TABLE IF NOT EXISTS account_diagnoses (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    algorithm_version TEXT NOT NULL,
+                    report_json TEXT NOT NULL,
+                    generated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_account_diagnoses_latest
+                    ON account_diagnoses(account_id, generated_at DESC, id DESC);
+                PRAGMA user_version = 3;
                 """
             )
 
@@ -322,3 +331,50 @@ class OperatorAccountRepository:
                 "DELETE FROM historical_posts WHERE account_id = ? AND id = ?", (account_id, post_id)
             )
             return cursor.rowcount > 0
+
+    def save_diagnosis(self, diagnosis_id: str, account_id: str, algorithm_version: str,
+                       report_json: str, generated_at: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO account_diagnoses "
+                "(id, account_id, algorithm_version, report_json, generated_at) VALUES (?, ?, ?, ?, ?)",
+                (diagnosis_id, account_id, algorithm_version, report_json, generated_at),
+            )
+            conn.execute(
+                "UPDATE operator_accounts SET diagnosis_completed_at = ?, updated_at = ? WHERE id = ?",
+                (generated_at, generated_at, account_id),
+            )
+            row = conn.execute("SELECT changes() AS changed").fetchone()
+            if row["changed"] == 0:
+                raise AccountNotFoundError(account_id)
+        return self.get_diagnosis(account_id, diagnosis_id) or {}
+
+    def get_latest_diagnosis(self, account_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM account_diagnoses WHERE account_id = ? "
+                "ORDER BY generated_at DESC, id DESC LIMIT 1", (account_id,),
+            ).fetchone()
+        return self._diagnosis(row) if row else None
+
+    def get_diagnosis(self, account_id: str, diagnosis_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM account_diagnoses WHERE account_id = ? AND id = ?",
+                (account_id, diagnosis_id),
+            ).fetchone()
+        return self._diagnosis(row) if row else None
+
+    @staticmethod
+    def _diagnosis(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["report"] = json.loads(result.pop("report_json"))
+        return result
+
+    def list_diagnoses(self, account_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM account_diagnoses WHERE account_id = ? "
+                "ORDER BY generated_at DESC, id DESC LIMIT ?", (account_id, limit),
+            ).fetchall()
+        return [self._diagnosis(row) for row in rows]

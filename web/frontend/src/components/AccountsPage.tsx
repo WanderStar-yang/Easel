@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import {
   fetchAccounts, startLogin, loginStatus, mediaUrl,
   accountWhoami, logoutAccount, submitLoginSms,
@@ -7,6 +7,8 @@ import {
 import type { AccountItem, AccountWhoami, OperatorAccount } from '../lib/api';
 import { getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
 import HistoricalPostsPanel from './HistoricalPostsPanel';
+
+const AccountDiagnosisPanel = lazy(() => import('./AccountDiagnosisPanel'));
 
 type QRState = {
   platform: string;
@@ -45,6 +47,7 @@ export default function AccountsPage() {
   const [operatorAccounts, setOperatorAccounts] = useState<OperatorAccount[]>([]);
   const [operatorAccountsErr, setOperatorAccountsErr] = useState('');
   const [historyAccount, setHistoryAccount] = useState<OperatorAccount | null>(null);
+  const [diagnosisAccount, setDiagnosisAccount] = useState<OperatorAccount | null>(null);
   const [err, setErr] = useState('');
   const [qr, setQr] = useState<QRState | null>(null);
   const [qrNonce, setQrNonce] = useState(0);   // 每次登录 +1，稳定缓存 key，避免每次轮询 img 闪烁
@@ -328,14 +331,25 @@ export default function AccountsPage() {
               <div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 10 }}>
                 <strong>Strategy</strong><br />{account.strategy.summary || '尚未填写'}
               </div>
-              <button className="btn btn-sm" style={{ marginTop: 14, width: '100%' }}
-                onClick={() => setHistoryAccount(account)}>
-                历史内容与导入
-              </button>
+              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                <button className="btn btn-sm" style={{ flex: 1 }}
+                  onClick={() => { setDiagnosisAccount(null); setHistoryAccount(account); }}>
+                  历史内容与导入
+                </button>
+                <button className="btn btn-sm btn-primary" style={{ flex: 1 }}
+                  onClick={() => { setHistoryAccount(null); setDiagnosisAccount(account); }}>
+                  首次账号诊断
+                </button>
+              </div>
             </article>
           ))}
         </div>
         {historyAccount && <HistoricalPostsPanel account={historyAccount} onClose={() => setHistoryAccount(null)} />}
+        {diagnosisAccount && (
+          <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载诊断报告…</div>}>
+            <AccountDiagnosisPanel account={diagnosisAccount} onClose={() => setDiagnosisAccount(null)} />
+          </Suspense>
+        )}
       </section>
 
       <h2 style={{ fontSize: 18, margin: '0 0 6px' }}>平台登录连接</h2>
