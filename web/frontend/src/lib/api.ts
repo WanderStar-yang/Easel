@@ -453,6 +453,7 @@ export interface HistoricalPost {
   account_id: string;
   platform: 'douyin' | 'xiaohongshu';
   publish_time: string | null;
+  publish_time_raw: string | null;
   title: string;
   content_type: string | null;
   content_source: 'REAL' | 'AI' | 'MIXED' | 'UNKNOWN';
@@ -473,12 +474,15 @@ export interface HistoricalPost {
   platform_post_id: string | null;
   data_source: 'DOUYIN_OPEN_API' | 'DOUYIN_CREATOR_CENTER' | 'FILE_IMPORT' | 'MANUAL';
   source_updated_at: string | null;
+  source_presence: 'PRESENT' | 'MISSING';
+  missing_since: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface HistoricalPostInput {
   publish_time?: string | null;
+  publish_time_raw?: string | null;
   title: string;
   content_type?: string | null;
   content_source?: HistoricalPost['content_source'];
@@ -517,13 +521,29 @@ export interface HistoricalCompleteness {
 
 export interface HistoricalImportPreview {
   preview_id: string;
+  preview_kind?: 'snapshot';
+  snapshot_complete?: boolean;
+  can_confirm?: boolean;
+  platform_unique_count?: number;
+  database_current_count?: number;
+  insert_count?: number;
+  update_count?: number;
+  historical_duplicate_count?: number;
+  platform_missing_count?: number;
+  publish_time_backfill_count?: number;
+  raw_observation_count?: number;
+  errors?: Array<{ row: number; title: string; errors: Record<string, string> }>;
+  message?: string;
   total_rows: number;
   scanned_count?: number;
+  unique_count?: number;
+  scan_duplicate_count?: number;
+  pages_scanned?: number;
   importable_count: number;
-  update_count?: number;
   error_count: number;
   duplicate_count: number;
   missing_fields: Array<{ field: string; missing_rows: number; column_missing: boolean }>;
+  ignored_columns?: string[];
   headers: string[];
   rows: Array<{
     row: number;
@@ -589,6 +609,18 @@ export interface AccountDiagnosisReport {
   ip_business_signals?: { profile_visits_median: number | null; inquiries_median: number | null; interpretation: string };
 }
 
+export interface HistoricalRepairPreview {
+  preview_id: string;
+  account_id: string;
+  database_current_count: number;
+  duplicate_groups: number;
+  duplicate_count: number;
+  canonical_count_after_repair: number;
+  reference_remap_count: number;
+  groups: Array<{ canonical_id: string; duplicate_ids: string[]; title: string; merged_fields: string[] }>;
+  preview_truncated: boolean;
+}
+
 function operatorPostsPath(accountId: string): string {
   return `/api/operator/accounts/${encodeURIComponent(accountId)}/posts`;
 }
@@ -645,12 +677,19 @@ export interface CreatorCenterSyncSession {
   session_id: string;
   expires_at: string;
   status: 'extension_unavailable' | 'extension_available' | 'creator_tab_not_found' | 'not_logged_in'
-    | 'unsupported_page' | 'ready_to_scan' | 'scanning' | 'scan_completed' | 'scan_failed' | 'preview_ready';
+    | 'unsupported_page' | 'ready_to_scan' | 'scanning' | 'paused' | 'pause_requested' | 'resume_requested'
+    | 'end_requested' | 'ended' | 'cancelled' | 'scan_completed' | 'scan_failed' | 'preview_ready';
   extension_available?: boolean;
   message?: string;
-  last_seen_at?: string | null;
   preview_id?: string | null;
   preview?: HistoricalImportPreview | null;
+  raw_observation_count?: number;
+  unique_count?: number;
+  duplicate_count?: number;
+  pages_scanned?: number;
+  expected_count?: number | null;
+  has_more?: boolean;
+  next_page_hint?: string | null;
 }
 
 export interface DouyinOpenApiStatus {
@@ -674,6 +713,40 @@ export function createCreatorCenterSyncSession(accountId: string): Promise<Creat
 
 export function getCreatorCenterSyncSession(accountId: string, sessionId: string): Promise<CreatorCenterSyncSession> {
   return request<CreatorCenterSyncSession>(`${operatorPostsPath(accountId)}/sync/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function listCreatorCenterSyncSessions(accountId: string): Promise<{ items: CreatorCenterSyncSession[] }> {
+  return request<{ items: CreatorCenterSyncSession[] }>(`${operatorPostsPath(accountId)}/sync/sessions`);
+}
+
+export function controlCreatorCenterSyncSession(
+  accountId: string, sessionId: string, action: 'pause' | 'resume' | 'end' | 'cancel',
+): Promise<CreatorCenterSyncSession> {
+  return request<CreatorCenterSyncSession>(`${operatorPostsPath(accountId)}/sync/sessions/${encodeURIComponent(sessionId)}/control`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+  });
+}
+
+export function confirmCreatorCenterSnapshot(accountId: string, previewId: string): Promise<{
+  inserted_count: number; updated_count: number; archived_duplicate_count: number;
+  platform_missing_count: number; publish_time_backfill_count: number; canonical_count: number;
+  reference_remap_count: number; diagnosis_stale: boolean; last_sync_at: string;
+}> {
+  return request(`${operatorPostsPath(accountId)}/sync/snapshots/confirm`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preview_id: previewId }),
+  });
+}
+
+export function previewHistoricalRepair(accountId: string): Promise<HistoricalRepairPreview> {
+  return request(`${operatorPostsPath(accountId)}/repair/preview`, { method: 'POST' });
+}
+
+export function confirmHistoricalRepair(accountId: string, previewId: string): Promise<{
+  archived_duplicate_count: number; canonical_count: number; reference_remap_count: number; diagnosis_stale: boolean;
+}> {
+  return request(`${operatorPostsPath(accountId)}/repair/confirm`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preview_id: previewId }),
+  });
 }
 
 export function runAccountDiagnosis(accountId: string): Promise<AccountDiagnosisReport> {

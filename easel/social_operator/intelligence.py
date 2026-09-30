@@ -157,7 +157,7 @@ def _segment_values(rows: list[dict], platform: Platform) -> dict[str, dict[str,
         dimensions["content_source"][source].append(row)
         content_type = (row.get("content_type") or "未分类").strip()
         dimensions["content_type"][content_type].append(row)
-        dimensions["hook"]["有 Hook" if (row.get("hook_type") or "").strip() else "无 Hook"].append(row)
+        dimensions["hook"][(row.get("hook_type") or "").strip() or "未标注 / 无数据"].append(row)
         if platform == Platform.DOUYIN:
             for subject in _subject_groups(row):
                 dimensions["subjects"][subject].append(row)
@@ -181,8 +181,8 @@ def _distribution(rows: list[dict], platform: Platform) -> dict:
             subject_counts.update(_subject_groups(row))
         result.update({
             "subjects": dict(subject_counts),
-            "hook": dict(Counter("有 Hook" if (row.get("hook_type") or "").strip() else "无 Hook" for row in rows)),
-            "duration": dict(Counter(_duration_group(row.get("duration")) for row in rows if row.get("duration") is not None)),
+            "hook": dict(Counter((row.get("hook_type") or "").strip() or "未标注 / 无数据" for row in rows)),
+            "duration": dict(Counter(_duration_group(row.get("duration")) or "暂无数据" for row in rows)),
             "publish_period": dict(Counter(_publish_period(row.get("publish_time")) for row in rows if _publish_period(row.get("publish_time")))),
         })
     return result

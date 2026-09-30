@@ -91,6 +91,7 @@ class HistoricalPost:
     account_id: str
     platform: Platform
     publish_time: str | None
+    publish_time_raw: str | None
     title: str
     content_type: str | None
     content_source: ContentSource
@@ -110,6 +111,8 @@ class HistoricalPost:
     platform_post_id: str | None
     data_source: str
     source_updated_at: str | None
+    source_presence: str
+    missing_since: str | None
     created_at: str
     updated_at: str
 
@@ -119,6 +122,7 @@ class HistoricalPost:
             "account_id": self.account_id,
             "platform": self.platform.value,
             "publish_time": self.publish_time,
+            "publish_time_raw": self.publish_time_raw,
             "title": self.title,
             "content_type": self.content_type,
             "content_source": self.content_source.value,
@@ -139,6 +143,8 @@ class HistoricalPost:
             "platform_post_id": self.platform_post_id,
             "data_source": self.data_source,
             "source_updated_at": self.source_updated_at,
+            "source_presence": self.source_presence,
+            "missing_since": self.missing_since,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

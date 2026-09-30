@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
@@ -12,7 +12,7 @@ from .data_sources import ManualInputAdapter
 from .repository import AccountNotFoundError, OperatorAccountRepository
 
 POST_FIELDS = (
-    "publish_time", "title", "content_type", "content_source", "tags", "note", "duration",
+    "publish_time", "publish_time_raw", "title", "content_type", "content_source", "tags", "note", "duration",
     "subjects", "hook_type", "views", "likes", "comments", "favorites", "shares",
     "followers_gain", "profile_visits", "inquiries", "platform_post_id",
 )
@@ -56,8 +56,15 @@ def _parse_datetime(value: object) -> str | None:
     else:
         raw = str(value).strip()
         parsed = None
+        import re
+        chinese = re.fullmatch(r"(20\d{2})年(\d{1,2})月(\d{1,2})日(?:\s+(\d{1,2}):(\d{2}))?", raw)
+        if chinese:
+            year, month, day, hour, minute = chinese.groups()
+            parsed = datetime(int(year), int(month), int(day), int(hour or 0), int(minute or 0),
+                              tzinfo=timezone(timedelta(hours=8)))
         try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed is None:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
             for fmt in ("%Y/%m/%d %H:%M", "%Y/%m/%d", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
                 try:
@@ -127,7 +134,10 @@ def normalize_post(values: dict, platform: Platform, *, partial: bool = False) -
                     raise ValueError("标题不能为空")
                 normalized[field] = title
             elif field == "publish_time":
-                normalized[field] = _parse_datetime(value)
+                raw_time = source.get("publish_time_raw")
+                normalized[field] = _parse_datetime(value if not _blank(value) else raw_time)
+            elif field == "publish_time_raw":
+                normalized[field] = None if _blank(value) else str(value).strip()
             elif field == "content_source":
                 if isinstance(value, ContentSource):
                     normalized[field] = value.value
@@ -164,13 +174,15 @@ class HistoricalPostService:
     def _to_model(row: dict) -> HistoricalPost:
         return HistoricalPost(
             id=row["id"], account_id=row["account_id"], platform=Platform(row["platform"]),
-            publish_time=row["publish_time"], title=row["title"], content_type=row["content_type"],
+            publish_time=row["publish_time"], publish_time_raw=row.get("publish_time_raw"),
+            title=row["title"], content_type=row["content_type"],
             content_source=ContentSource(row["content_source"]), tags=row["tags"], note=row["note"],
             duration=row["duration"], subjects=row["subjects"], hook_type=row["hook_type"],
             views=row["views"], likes=row["likes"], comments=row["comments"], favorites=row["favorites"],
             shares=row["shares"], followers_gain=row["followers_gain"], profile_visits=row["profile_visits"],
             inquiries=row["inquiries"], platform_post_id=row["platform_post_id"],
             data_source=row.get("data_source", "MANUAL"), source_updated_at=row.get("source_updated_at"),
+            source_presence=row.get("source_presence", "PRESENT"), missing_since=row.get("missing_since"),
             created_at=row["created_at"], updated_at=row["updated_at"],
         )
 

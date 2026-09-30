@@ -19,6 +19,7 @@ from easel.social_operator.historical_sync import HistoricalSyncSessionManager
 from easel.social_operator.data_sources import DouyinCreatorCenterAdapter, DouyinOpenApiAdapter
 from easel.social_operator.models import ContentSource, Platform
 from easel.social_operator.repository import AccountNotFoundError, OperatorAccountRepository
+from easel.social_operator.snapshot_sync import SnapshotReconciliationManager
 from easel.social_operator.service import OperatorAccountService
 
 router = APIRouter(prefix="/api/operator/accounts/{account_id}/posts", tags=["historical-posts"])
@@ -30,6 +31,7 @@ class HistoricalServices:
     posts: HistoricalPostService
     imports: HistoricalImportManager
     sync_sessions: HistoricalSyncSessionManager = field(default_factory=HistoricalSyncSessionManager)
+    snapshots: SnapshotReconciliationManager | None = None
 
 
 @lru_cache(maxsize=1)
@@ -38,12 +40,13 @@ def get_historical_services() -> HistoricalServices:
     accounts = OperatorAccountService(repository)
     posts = HistoricalPostService(repository)
     return HistoricalServices(accounts, posts, HistoricalImportManager(posts, repository),
-                              HistoricalSyncSessionManager())
+                              HistoricalSyncSessionManager(repository), SnapshotReconciliationManager(repository))
 
 
 class _PostModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     publish_time: str | None = None
+    publish_time_raw: str | None = None
     title: str = Field(min_length=1, max_length=1000)
     content_type: str | None = None
     content_source: ContentSource = ContentSource.UNKNOWN
@@ -71,6 +74,7 @@ class PostCreate(_PostModel):
 class PostUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     publish_time: str | None = None
+    publish_time_raw: str | None = None
     title: str | None = Field(default=None, max_length=1000)
     content_type: str | None = None
     content_source: ContentSource | None = None
@@ -184,15 +188,38 @@ class ImportConfirm(BaseModel):
     preview_id: str
 
 
+class SnapshotConfirm(BaseModel):
+    preview_id: str
+
+
+def _snapshots(services: HistoricalServices) -> SnapshotReconciliationManager:
+    if services.snapshots is None:
+        services.snapshots = SnapshotReconciliationManager(services.posts.repository)
+    return services.snapshots
+
+
 class CreatorCenterPreview(BaseModel):
     source_url: str
-    records: list[dict] = Field(max_length=5000)
+    records: list[dict] = Field(default_factory=list, max_length=5000)
+
+
+class CreatorCenterCheckpoint(BaseModel):
+    source_url: str
+    page_fingerprint: str = Field(min_length=1, max_length=500)
+    rows: list[dict] = Field(max_length=5000)
+    has_next: bool = False
+    next_page_hint: str = Field(default="", max_length=500)
+    expected_count: int | None = Field(default=None, ge=0, le=100000)
+
+
+class CreatorCenterControl(BaseModel):
+    action: Literal["pause", "resume", "end", "cancel"]
 
 
 class CreatorCenterExtensionState(BaseModel):
     status: Literal[
         "extension_available", "creator_tab_not_found", "not_logged_in", "unsupported_page",
-        "ready_to_scan", "scanning", "scan_completed", "scan_failed",
+        "ready_to_scan", "scanning", "paused", "scan_completed", "scan_failed", "ended", "cancelled",
     ]
     message: str = Field(default="", max_length=300)
     source_url: str = ""
@@ -220,6 +247,12 @@ def create_sync_session(account_id: str, services: HistoricalServices = Depends(
     if account.platform != Platform.DOUYIN:
         raise HTTPException(status_code=409, detail="创作者中心辅助同步仅适用于抖音账号")
     return services.sync_sessions.create(account_id)
+
+
+@router.get("/sync/sessions")
+def list_sync_sessions(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    return {"items": services.sync_sessions.list(account_id)}
 
 
 @router.post("/sync/sessions/{session_id}/extension-state")
@@ -251,6 +284,39 @@ def get_sync_session(account_id: str, session_id: str,
         raise HTTPException(status_code=404, detail="同步会话不存在、已过期或不属于当前账号") from exc
 
 
+@router.post("/sync/sessions/{session_id}/control")
+def control_sync_session(account_id: str, session_id: str, payload: CreatorCenterControl,
+                         services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    try:
+        return services.sync_sessions.control(account_id, session_id, payload.action)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="同步会话不存在、已过期或不属于当前账号") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/sync/sessions/{session_id}/checkpoint")
+def checkpoint_creator_center_scan(account_id: str, session_id: str, payload: CreatorCenterCheckpoint,
+                                   services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    account = services.accounts.get_account(account_id)
+    if account.platform != Platform.DOUYIN:
+        raise HTTPException(status_code=409, detail="创作者中心辅助同步仅适用于抖音账号")
+    try:
+        return services.sync_sessions.checkpoint(
+            account_id, session_id, payload.rows, payload.source_url,
+            page_fingerprint=payload.page_fingerprint, has_next=payload.has_next,
+            next_page_hint=payload.next_page_hint, expected_count=payload.expected_count,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="同步会话不存在、已过期或不属于当前账号") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/sync/sessions/{session_id}/preview", status_code=201)
 def preview_creator_center_sync(account_id: str, session_id: str, payload: CreatorCenterPreview,
                                 services: HistoricalServices = Depends(get_historical_services)):
@@ -261,12 +327,21 @@ def preview_creator_center_sync(account_id: str, session_id: str, payload: Creat
     if not services.sync_sessions.validate_creator_center_url(payload.source_url):
         raise HTTPException(status_code=403, detail="只接受从抖音创作者中心页面主动扫描的数据")
     try:
+        # A Snapshot is the session's accumulated, deduplicated full scan. Ignore any
+        # client-side row payload so confirmation cannot reconcile a partial/different set.
+        records = services.sync_sessions.preview_records(account_id, session_id)
+        session_status = services.sync_sessions.get(account_id, session_id)
+        if session_status["status"] not in {"scan_completed", "ended"}:
+            raise HTTPException(status_code=409, detail="请先完成扫描或结束当前扫描，再生成已保存内容的预览")
         adapter = DouyinCreatorCenterAdapter()
-        preview_id, summary = services.imports.preview_records(
-            account_id, adapter.adapt(payload.records), source=adapter.source, update_existing=True,
+        summary = _snapshots(services).preview_snapshot(
+            account_id, adapter.adapt(records), raw_count=session_status["raw_observation_count"],
+            scan_duplicate_count=session_status["duplicate_count"], pages_scanned=session_status["pages_scanned"],
+            expected_count=session_status.get("expected_count"),
+            scan_complete=session_status["status"] == "scan_completed",
         )
         return services.sync_sessions.attach_preview(
-            account_id, session_id, preview_id, {"preview_id": preview_id, **summary}, payload.source_url,
+            account_id, session_id, summary["preview_id"], summary, payload.source_url,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -274,6 +349,39 @@ def preview_creator_center_sync(account_id: str, session_id: str, payload: Creat
         raise HTTPException(status_code=404, detail="同步会话不存在、已过期或不属于当前账号") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sync/snapshots/confirm")
+def confirm_creator_center_snapshot(account_id: str, payload: SnapshotConfirm,
+                                    services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    try:
+        return _snapshots(services).confirm(account_id, payload.preview_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="快照预览不存在、已过期或不属于当前账号") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/repair/preview")
+def preview_historical_repair(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    try:
+        return _snapshots(services).preview_repair(account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/repair/confirm")
+def confirm_historical_repair(account_id: str, payload: SnapshotConfirm,
+                              services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    try:
+        return _snapshots(services).confirm_repair(account_id, payload.preview_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="修复预览不存在、已过期或不属于当前账号") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/imports/confirm")

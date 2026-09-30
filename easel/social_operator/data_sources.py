@@ -13,7 +13,7 @@ class HistoricalDataSourceAdapter(Protocol):
 
 
 _FACT_FIELDS = (
-    "platform_post_id", "title", "publish_time", "duration", "views", "likes", "comments",
+    "platform_post_id", "title", "publish_time", "publish_time_raw", "duration", "views", "likes", "comments",
     "favorites", "shares",
 )
 

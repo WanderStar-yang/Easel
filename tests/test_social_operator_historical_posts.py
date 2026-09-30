@@ -139,6 +139,36 @@ def test_xlsx_import_and_exposure_alias(services):
     assert post.profile_visits == 20 and post.inquiries == 1
 
 
+def test_douyin_creator_export_headers_import_and_report_unsupported_columns(services):
+    buffer = io.BytesIO()
+    pd.DataFrame([{
+        "作品名称": "双猫日常", "发布时间": "2026-09-28 19:17:51", "体裁": "图文", "审核状态": "公开",
+        "播放量": 908, "完播率": 0.144404, "5s完播率": 0.144404, "封面点击率": 0,
+        "2s跳出率": 0.583333, "平均播放时长": 3.150901, "点赞量": 14, "分享量": 1,
+        "评论量": 6, "收藏量": 0, "主页访问量": 2, "粉丝增量": 1,
+    }]).to_excel(buffer, index=False, engine="openpyxl")
+
+    preview_id, preview = services.imports.preview("douyin-pet", "作品列表导出.xlsx", buffer.getvalue())
+
+    assert preview["total_rows"] == 1
+    assert preview["importable_count"] == 1
+    assert preview["error_count"] == 0
+    assert preview["rows"][0]["record"]["title"] == "双猫日常"
+    assert preview["rows"][0]["record"]["content_type"] == "图文"
+    assert preview["rows"][0]["record"]["likes"] == 14
+    assert preview["rows"][0]["record"]["comments"] == 6
+    assert preview["rows"][0]["record"]["favorites"] == 0
+    assert preview["rows"][0]["record"]["shares"] == 1
+    assert preview["rows"][0]["record"]["followers_gain"] == 1
+    assert set(preview["ignored_columns"]) == {
+        "审核状态", "完播率", "5s完播率", "封面点击率", "2s跳出率", "平均播放时长",
+    }
+    assert services.posts.list_posts("douyin-pet") == []
+    assert services.imports.confirm("douyin-pet", preview_id)["imported_count"] == 1
+    saved = services.posts.list_posts("douyin-pet")[0]
+    assert saved.views == 908 and saved.profile_visits == 2 and saved.followers_gain == 1
+
+
 def test_empty_file_and_missing_columns_are_previewable(services):
     preview_id, empty = services.imports.preview("douyin-pet", "empty.csv", b"")
     assert empty["total_rows"] == 0 and empty["error_count"] == 0

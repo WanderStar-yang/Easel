@@ -20,7 +20,7 @@ def services(tmp_path):
     accounts = OperatorAccountService(repository)
     posts = HistoricalPostService(repository)
     imports = HistoricalImportManager(posts, repository)
-    return HistoricalServices(accounts, posts, imports, HistoricalSyncSessionManager())
+    return HistoricalServices(accounts, posts, imports, HistoricalSyncSessionManager(repository))
 
 
 def _api(services):
@@ -43,7 +43,7 @@ def test_creator_center_adapter_keeps_missing_null_and_zero_and_does_not_classif
     assert adapted["comments"] is None
     assert adapted["publish_time"] is None
     assert set(adapted) == {
-        "platform_post_id", "title", "publish_time", "duration", "views", "likes", "comments",
+        "platform_post_id", "title", "publish_time", "publish_time_raw", "duration", "views", "likes", "comments",
         "favorites", "shares",
     }
 
@@ -56,91 +56,6 @@ def test_open_api_adapter_is_an_honest_unconfigured_placeholder(monkeypatch):
     assert status["implementation_available"] is False
     with pytest.raises(RuntimeError, match="不会伪造"):
         DouyinOpenApiAdapter().adapt([])
-
-
-def test_sync_preview_is_account_scoped_and_does_not_persist_until_confirm(services):
-    session = services.sync_sessions.create("douyin-pet")
-    preview_id, summary = services.imports.preview_records(
-        "douyin-pet", DouyinCreatorCenterAdapter().adapt([{
-            "platform_post_id": "aweme-1", "title": "真实作品", "views": 0,
-            "likes": None, "comments": 3,
-        }]), source="DOUYIN_CREATOR_CENTER", update_existing=True,
-    )
-    services.sync_sessions.attach_preview(
-        "douyin-pet", session["session_id"], preview_id,
-        {"preview_id": preview_id, **summary}, "https://creator.douyin.com/creator-micro/content/manage",
-    )
-    assert services.posts.list_posts("douyin-pet") == []
-    assert services.posts.list_posts("xhs-developer") == []
-    result = services.imports.confirm("douyin-pet", preview_id)
-    assert result["imported_count"] == 1
-    post = services.posts.list_posts("douyin-pet")[0]
-    assert post.platform_post_id == "aweme-1"
-    assert post.views == 0 and post.likes is None and post.comments == 3
-    assert post.data_source == "DOUYIN_CREATOR_CENTER"
-    assert post.source_updated_at
-    assert services.posts.list_posts("xhs-developer") == []
-    status = services.posts.repository.get_sync_status("douyin-pet")
-    assert status["last_sync_at"] == result["last_sync_at"]
-    assert status["last_sync_source"] == "DOUYIN_CREATOR_CENTER"
-    assert status["last_sync_counts"]["inserted_count"] == 1
-
-
-def test_incremental_sync_updates_platform_id_metrics_and_preserves_user_classification(services):
-    original = services.posts.create_post("douyin-pet", {
-        "title": "手工补过分类", "publish_time": "2025-03-01", "platform_post_id": "aweme-42",
-        "content_type": "双猫互动", "content_source": "REAL", "subjects": ["缅因", "布偶"],
-        "tags": ["已人工确认"], "views": 10, "likes": 2, "comments": 1,
-    })
-    preview_id, summary = services.imports.preview_records(
-        "douyin-pet", DouyinCreatorCenterAdapter().adapt([{
-            "platform_post_id": "aweme-42", "title": "平台标题更新", "views": 0,
-            "likes": 0, "comments": None, "favorites": 5,
-        }, {
-            "platform_post_id": "aweme-43", "title": "新作品", "publish_time": "2025-03-02",
-            "views": 18, "likes": 1,
-        }]), source="DOUYIN_CREATOR_CENTER", update_existing=True,
-    )
-    assert summary["update_count"] == 1 and summary["importable_count"] == 1
-    assert len(services.posts.list_posts("douyin-pet")) == 1  # preview is read-only
-    result = services.imports.confirm("douyin-pet", preview_id)
-    assert result["updated_count"] == 1 and result["imported_count"] == 1
-    rows = services.posts.list_posts("douyin-pet")
-    existing = next(row for row in rows if row.id == original.id)
-    assert existing.views == 0 and existing.likes == 0 and existing.comments == 1
-    assert existing.favorites == 5
-    assert existing.title == "手工补过分类"
-    assert existing.content_type == "双猫互动" and existing.content_source.value == "REAL"
-    assert existing.subjects == ["缅因", "布偶"] and existing.tags == ["已人工确认"]
-    assert {row.platform_post_id for row in rows} == {"aweme-42", "aweme-43"}
-
-
-def test_sync_without_platform_id_uses_phase2_duplicate_rule_and_skips_without_merge(services):
-    original = services.posts.create_post("douyin-pet", {
-        "title": "无平台 ID 的作品", "publish_time": "2025-04-01", "views": 10,
-    })
-    preview_id, summary = services.imports.preview_records(
-        "douyin-pet", [{"title": "无平台 ID 的作品", "publish_time": "2025-04-01", "views": 99}],
-        source="DOUYIN_CREATOR_CENTER", update_existing=True,
-    )
-    assert summary["duplicate_count"] == 1
-    result = services.imports.confirm("douyin-pet", preview_id)
-    assert result["imported_count"] == 0 and result["updated_count"] == 0
-    assert services.posts.get_post("douyin-pet", original.id).views == 10
-
-
-def test_repeated_sync_is_idempotent_and_only_reports_updates(services):
-    record = {"platform_post_id": "repeat-1", "title": "可重复扫描作品", "views": 12, "likes": 2}
-    for expected_new, expected_update in ((1, 0), (0, 1)):
-        preview_id, _ = services.imports.preview_records(
-            "douyin-pet", DouyinCreatorCenterAdapter().adapt([record]),
-            source="DOUYIN_CREATOR_CENTER", update_existing=True,
-        )
-        result = services.imports.confirm("douyin-pet", preview_id)
-        assert result["imported_count"] == expected_new
-        assert result["updated_count"] == expected_update
-    assert len(services.posts.list_posts("douyin-pet")) == 1
-    assert services.posts.repository.get_sync_status("douyin-pet")["last_sync_counts"]["updated_count"] == 1
 
 
 def test_manual_and_file_sources_have_source_metadata(services):
@@ -165,6 +80,7 @@ def test_phase3_sqlite_schema_migrates_additive_sync_metadata(tmp_path):
         }.items():
             for column in columns:
                 conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        conn.execute("ALTER TABLE douyin_sync_sessions DROP COLUMN expected_count")
         conn.execute("PRAGMA user_version = 3")
     upgraded = OperatorAccountRepository(db_path)
     OperatorAccountService(upgraded)
@@ -172,7 +88,17 @@ def test_phase3_sqlite_schema_migrates_additive_sync_metadata(tmp_path):
     assert migrated.title == "迁移前记录" and migrated.views == 27
     assert migrated.data_source == "MANUAL"
     with upgraded._connect() as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        post_columns = {row["name"] for row in conn.execute("PRAGMA table_info(historical_posts)")}
+        assert {"publish_time_raw", "source_presence", "missing_since"} <= post_columns
+        diagnosis_columns = {row["name"] for row in conn.execute("PRAGMA table_info(account_diagnoses)")}
+        assert {"status", "stale_at", "stale_reason"} <= diagnosis_columns
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'douyin_sync_sessions'",
+        ).fetchone() is not None
+        assert "expected_count" in {
+            row["name"] for row in conn.execute("PRAGMA table_info(douyin_sync_sessions)")
+        }
         account_columns = {row["name"] for row in conn.execute("PRAGMA table_info(operator_accounts)")}
         assert {"last_sync_at", "last_sync_source", "last_sync_counts_json"} <= account_columns
 
@@ -194,6 +120,63 @@ def test_sync_session_expires_by_account_and_rejects_other_origin(services):
         services.sync_sessions.attach_preview(
             "douyin-pet", session["session_id"], "p1", {}, "https://evil.example/creator.douyin.com",
         )
+
+
+def test_sync_checkpoints_persist_across_manager_restart_and_deduplicate_in_two_stages(services):
+    session = services.sync_sessions.create("douyin-pet")
+    session_id = session["session_id"]
+    creator_url = "https://creator.douyin.com/creator-micro/content/manage"
+    first = services.sync_sessions.checkpoint("douyin-pet", session_id, [{
+        "title": "  Cat　story ", "publish_time": "2025/01/02", "views": 10,
+    }], creator_url, page_fingerprint="page-1", has_next=True, next_page_hint="page-2")
+    assert first["raw_observation_count"] == 1 and first["unique_count"] == 1
+
+    # Construct a new manager as if the web server restarted. The account-bound
+    # session and first page are loaded from the existing SQLite database.
+    restarted = HistoricalSyncSessionManager(services.posts.repository)
+    restored = restarted.get("douyin-pet", session_id)
+    assert restored["pages_scanned"] == 1 and restored["has_more"] is True
+    second = restarted.checkpoint("douyin-pet", session_id, [{
+        "platform_post_id": "aweme-1", "title": "cat story", "publish_time": "2025-01-02", "likes": 2,
+    }, {
+        "platform_post_id": "aweme-1", "title": "cat story", "publish_time": "2025-01-02", "views": 12,
+    }], creator_url, page_fingerprint="page-2", has_next=False)
+    assert second["raw_observation_count"] == 3
+    assert second["unique_count"] == 1
+    assert second["duplicate_count"] == 2
+    assert second["pages_scanned"] == 2 and second["status"] == "scan_completed"
+    assert restarted.preview_records("douyin-pet", session_id)[0]["platform_post_id"] == "aweme-1"
+    with pytest.raises(LookupError):
+        restarted.get("xhs-developer", session_id)
+
+
+def test_sync_control_requests_pause_resume_end_and_cancel(services):
+    manager = services.sync_sessions
+    session_id = manager.create("douyin-pet")["session_id"]
+    assert manager.control("douyin-pet", session_id, "pause")["status"] == "pause_requested"
+    assert manager.report_state("douyin-pet", session_id, "paused")["status"] == "paused"
+    assert manager.control("douyin-pet", session_id, "resume")["status"] == "resume_requested"
+    assert manager.control("douyin-pet", session_id, "cancel")["status"] == "cancelled"
+    with pytest.raises(ValueError, match="不能再控制"):
+        manager.control("douyin-pet", session_id, "resume")
+
+
+def test_sync_does_not_mark_complete_below_creator_center_declared_count(services):
+    manager = services.sync_sessions
+    session_id = manager.create("douyin-pet")["session_id"]
+    url = "https://creator.douyin.com/creator-micro/content/manage"
+    partial = manager.checkpoint("douyin-pet", session_id, [
+        {"platform_post_id": "one", "title": "作品一"},
+        {"platform_post_id": "two", "title": "作品二"},
+    ], url, page_fingerprint="partial", has_next=False, expected_count=3)
+    assert partial["status"] == "paused"
+    assert partial["unique_count"] == 2 and partial["has_more"] is True
+    assert "共显示 3 条" in partial["message"]
+    complete = manager.checkpoint("douyin-pet", session_id, [
+        {"platform_post_id": "three", "title": "作品三"},
+    ], url, page_fingerprint="recovered", has_next=False, expected_count=3)
+    assert complete["status"] == "scan_completed"
+    assert complete["unique_count"] == 3 and complete["has_more"] is False
 
 
 def test_sync_api_preview_confirm_status_diagnosis_and_platform_isolation(services):
@@ -220,13 +203,21 @@ def test_sync_api_preview_confirm_status_diagnosis_and_platform_isolation(servic
         assert ext_state.status_code == 200 and ext_state.json()["status"] == "not_logged_in"
         assert ext_state.json()["extension_available"] is True
         for state in ("extension_available", "creator_tab_not_found", "unsupported_page", "ready_to_scan",
-                      "scanning", "scan_completed", "scan_failed"):
+                      "scanning", "scan_completed"):
             ready_state = client.post(
                 f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session_id}/extension-state",
                 json={"status": state, "message": state,
                       "source_url": "https://creator.douyin.com/creator-micro/content/manage"},
             )
             assert ready_state.status_code == 200 and ready_state.json()["status"] == state
+        checkpoint = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session_id}/checkpoint",
+            json={"source_url": "https://creator.douyin.com/creator-micro/content/manage",
+                  "page_fingerprint": "one-full-page", "has_next": False,
+                  "rows": [{"platform_post_id": "api-1", "title": "API 可见作品",
+                            "publish_time_raw": "2025年11月11日 09:46", "views": 0, "likes": None}]},
+        )
+        assert checkpoint.status_code == 200 and checkpoint.json()["status"] == "scan_completed"
         invalid_origin = client.post(
             f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session_id}/preview",
             json={"source_url": "https://example.com/", "records": []},
@@ -234,9 +225,7 @@ def test_sync_api_preview_confirm_status_diagnosis_and_platform_isolation(servic
         assert invalid_origin.status_code == 403
         scanned = client.post(
             f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session_id}/preview",
-            json={"source_url": "https://creator.douyin.com/creator-micro/content/manage", "records": [
-                {"platform_post_id": "api-1", "title": "API 可见作品", "views": 0, "likes": None},
-            ]},
+            json={"source_url": "https://creator.douyin.com/creator-micro/content/manage", "records": []},
         )
         assert scanned.status_code == 201, scanned.text
         assert scanned.json()["status"] == "preview_ready"
@@ -246,9 +235,9 @@ def test_sync_api_preview_confirm_status_diagnosis_and_platform_isolation(servic
         assert session_status.status_code == 200 and session_status.json()["preview_id"] == preview_id
         xhs_start = client.post("/api/operator/accounts/xhs-developer/posts/sync/sessions")
         assert xhs_start.status_code == 409
-        confirmed = client.post("/api/operator/accounts/douyin-pet/posts/imports/confirm",
+        confirmed = client.post("/api/operator/accounts/douyin-pet/posts/sync/snapshots/confirm",
                                 json={"preview_id": preview_id})
-        assert confirmed.status_code == 200 and confirmed.json()["imported_count"] == 1
+        assert confirmed.status_code == 200 and confirmed.json()["inserted_count"] == 1
         posts = client.get("/api/operator/accounts/douyin-pet/posts").json()
         assert posts["total"] == 1 and posts["items"][0]["data_source"] == "DOUYIN_CREATOR_CENTER"
         assert client.get("/api/operator/accounts/xhs-developer/posts").json()["total"] == 0
@@ -265,6 +254,72 @@ def test_sync_api_preview_confirm_status_diagnosis_and_platform_isolation(servic
         next(client_ctx, None)
 
 
+def test_end_completed_scan_preserves_preview_state_and_partial_scan_is_read_only(services):
+    client_ctx = _api(services)
+    client = next(client_ctx)
+    creator_url = "https://creator.douyin.com/creator-micro/content/manage"
+    try:
+        complete = client.post("/api/operator/accounts/douyin-pet/posts/sync/sessions").json()
+        complete_id = complete["session_id"]
+        checkpoint = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{complete_id}/checkpoint",
+            json={"source_url": creator_url, "page_fingerprint": "complete", "has_next": False,
+                  "rows": [{"platform_post_id": "complete-1", "title": "完整扫描作品"}]},
+        )
+        assert checkpoint.json()["status"] == "scan_completed"
+        ended_complete = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{complete_id}/control",
+            json={"action": "end"},
+        )
+        assert ended_complete.json()["status"] == "scan_completed"
+        full_preview = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{complete_id}/preview",
+            json={"source_url": creator_url, "records": []},
+        )
+        assert full_preview.status_code == 201
+        assert full_preview.json()["preview"]["snapshot_complete"] is True
+
+        partial = client.post("/api/operator/accounts/douyin-pet/posts/sync/sessions").json()
+        partial_id = partial["session_id"]
+        partial_checkpoint = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{partial_id}/checkpoint",
+            json={"source_url": creator_url, "page_fingerprint": "partial", "has_next": True,
+                  "next_page_hint": "下一页", "rows": [{"platform_post_id": "partial-1", "title": "部分扫描作品"}]},
+        )
+        assert partial_checkpoint.json()["status"] == "scanning"
+        paused = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{partial_id}/control",
+            json={"action": "pause"},
+        )
+        assert paused.json()["status"] == "pause_requested"
+        saved_pause = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{partial_id}/checkpoint",
+            json={"source_url": creator_url, "page_fingerprint": "partial", "has_next": True,
+                  "rows": [{"platform_post_id": "partial-1", "title": "部分扫描作品"}]},
+        )
+        assert saved_pause.json()["status"] == "paused"
+        ended_partial = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{partial_id}/control",
+            json={"action": "end"},
+        )
+        assert ended_partial.json()["status"] == "ended"
+        partial_preview = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{partial_id}/preview",
+            json={"source_url": creator_url, "records": []},
+        )
+        assert partial_preview.status_code == 201, partial_preview.text
+        assert partial_preview.json()["status"] == "preview_ready"
+        assert partial_preview.json()["preview"]["snapshot_complete"] is False
+        assert partial_preview.json()["preview"]["can_confirm"] is False
+        denied = client.post("/api/operator/accounts/douyin-pet/posts/sync/snapshots/confirm",
+                             json={"preview_id": partial_preview.json()["preview_id"]})
+        assert denied.status_code == 409
+        assert client.get("/api/operator/accounts/douyin-pet/posts").json()["total"] == 0
+    finally:
+        client.close()
+        next(client_ctx, None)
+
+
 def test_chrome_extension_preflight_is_restricted_to_sync_paths(services):
     from web.app import app
 
@@ -274,12 +329,16 @@ def test_chrome_extension_preflight_is_restricted_to_sync_paths(services):
         origin = "chrome-extension://" + "a" * 32
         path = "/api/operator/accounts/douyin-pet/posts/sync/sessions/opaque-token/preview"
         state_path = "/api/operator/accounts/douyin-pet/posts/sync/sessions/opaque-token/extension-state"
+        checkpoint_path = "/api/operator/accounts/douyin-pet/posts/sync/sessions/opaque-token/checkpoint"
         response = client.options(path, headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == origin
         state_response = client.options(state_path, headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
         assert state_response.status_code == 200
         assert state_response.headers["access-control-allow-origin"] == origin
+        checkpoint_response = client.options(checkpoint_path, headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
+        assert checkpoint_response.status_code == 200
+        assert checkpoint_response.headers["access-control-allow-origin"] == origin
         session = services.sync_sessions.create("douyin-pet")
         reported = client.post(
             f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session['session_id']}/extension-state",
@@ -288,11 +347,33 @@ def test_chrome_extension_preflight_is_restricted_to_sync_paths(services):
         )
         assert reported.status_code == 200 and reported.headers["access-control-allow-origin"] == origin
         assert reported.json()["status"] == "extension_available"
+        checkpointed = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session['session_id']}/checkpoint",
+            headers={"Origin": origin, "Content-Type": "application/json"},
+            json={"source_url": "https://creator.douyin.com/creator-micro/content/manage",
+                  "page_fingerprint": "page-1", "rows": [{"platform_post_id": "scan-1", "title": "检查点"}],
+                  "has_next": True, "next_page_hint": "page-2"},
+        )
+        assert checkpointed.status_code == 200 and checkpointed.headers["access-control-allow-origin"] == origin
+        assert checkpointed.json()["unique_count"] == 1 and checkpointed.json()["raw_observation_count"] == 1
+        final_page = client.post(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session['session_id']}/checkpoint",
+            headers={"Origin": origin, "Content-Type": "application/json"},
+            json={"source_url": "https://creator.douyin.com/creator-micro/content/manage",
+                  "page_fingerprint": "page-2", "rows": [{"platform_post_id": "scan-2", "title": "末页作品",
+                    "publish_time_raw": "2025年11月12日 09:46"}], "has_next": False},
+        )
+        assert final_page.status_code == 200 and final_page.json()["status"] == "scan_completed"
+        read_session = client.get(
+            f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session['session_id']}",
+            headers={"Origin": origin},
+        )
+        assert read_session.status_code == 200 and read_session.headers["access-control-allow-origin"] == origin
         posted = client.post(
             f"/api/operator/accounts/douyin-pet/posts/sync/sessions/{session['session_id']}/preview",
             headers={"Origin": origin, "Content-Type": "application/json"},
             json={"source_url": "https://creator.douyin.com/creator-micro/content/manage",
-                  "records": [{"title": "扩展已主动扫描", "views": 0}]},
+                  "records": []},
         )
         assert posted.status_code == 201, posted.text
         assert posted.headers["access-control-allow-origin"] == origin

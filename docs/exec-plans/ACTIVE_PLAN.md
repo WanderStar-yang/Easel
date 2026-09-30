@@ -1,10 +1,10 @@
 # AI Social Operator V1 — Active Implementation Plan
 
-- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5 与 Phase 3.5.1 实现已完成；真实 Chrome 扩展及账号采集仍待用户本机验收；等待用户确认后再进入 Phase 4
+- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.5.1、Phase 3.5.3 与 Phase 3.5 Snapshot 策略调整已实现；新扩展真实全量扫描/预览验收待完成；未开始 Phase 4
 - 更新日期：2026-09-29
 - 源码基线：Easel `main` at `0cab7ca6f6e8286635d25fe2435dda11a975ffec`
 - 本计划依据：`../../AGENTS.md`、`../product-specs/AI_SOCIAL_OPERATOR_V1.md`、`PLANS.md`、`../audits/EASEL_V1_SOURCE_AUDIT.md` 及当前仓库源码
-- 本轮边界：Phase 3.5 历史数据采集已完成；未开始 Phase 4 Account Baseline 或 Strategy Recommendation
+- 本轮边界：只调整并验证 Phase 3.5 Full Snapshot Sync；未开始 Phase 4 Account Baseline 或 Strategy Recommendation
 
 ## 1. 文档与路径核对
 
@@ -113,7 +113,7 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 | 1 | 1 双账号基础模型 | Account、Profile/Strategy 关联、状态与隔离 | 使用 `easel/social_operator/` 业务服务、独立数据仓库、V1 API router；不复用登录账户模型 |
 | 2 | 2 历史数据导入 | 手工/CSV/XLSX 历史内容、校验和完整度 | 复用 `python-multipart`、上传/Outputs 与 pandas；新增 HistoricalPost 存储/API/UI；平台抓取不得成为前置依赖 |
 | 3 | 3 Intelligence Engine / Initial Diagnosis | 逐帖/分组分析和可追溯诊断报告 | 复用 `skills/shared/scripts/social_stats.py` 与 `skill-account-diagnosis` 框架；结构化样本、来源与置信度由业务服务提供 |
-| 3.5 | 3.5 Douyin Historical Data Acquisition | Creator Center 为默认主入口；统一预览确认和增量写入 | 增加来源 Adapter；复用 Phase 2 `HistoricalImportService`，Phase 3 引擎只消费 HistoricalPost；Chrome MV3 DOM helper；OpenAPI 为高级选项 |
+| 3.5 | 3.5 Douyin Historical Data Acquisition | Creator Center 每次全量扫描；完整快照 Preview → Confirm → Reconciliation | 复用 HistoricalPost 和 account-scoped 同步会话；稳定 ID/指纹对账；CSV/XLSX 原 Preview/Confirm 保留；OpenAPI 为高级选项 |
 | 3.5.1 | 3.5.1 Douyin Creator Center Sync UX Fix | 无历史作品诊断引导、同步向导、扩展握手和状态反馈 | 复用既有同步适配器/session/preview/confirm，不重做采集器 |
 | 4 | 4 Account Baseline | 账号级历史中位数/分组基线 | 复用 `social_stats.py`；存储 sampleSize、日期范围和快照版本 |
 | 5 | 5 Strategy Recommendation | 双账号独立定位、支柱、比例、实验建议 | 复用 `skill-strategy-advisor`/`skill-content-strategy` 的方法；定位仍为建议，不自动激活 |
@@ -275,3 +275,70 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 - 因当前测试浏览器未安装本地扩展、无用户抖音登录态，扩展握手 UI 状态通过真实运行服务的同步会话 API 发出 `not_logged_in` 事件进行走查，确认 Easel 自动显示“等待你在网页中自行登录”。这验证了 UI 与后端会话状态联动，但不等价于验证扩展已在 Chrome 安装运行或抖音页面 DOM 与真实账号匹配。
 - 真实抖音登录、作品扫描、DOM 字段识别、扫描预览与确认写库需用户在本机按 README 进行最终验收；没有要求在此使用真实账号。
 - 最终全量 Python Test：`359 passed, 6 skipped`；扩展 DOM Node Test：`2 passed`；扩展 JS 语法及 manifest JSON 校验通过。`npm run build`（含 TypeScript）通过；`npm run lint` 通过，仍报告两条既有 warning（`linkifyOutputs.ts` 的无用转义、`AccountsPage.tsx` 的 `openCred` hook 依赖）；`git diff --check` 通过。无新增依赖。
+
+## 13. Phase 3.5.3 执行记录：Douyin Sync Deduplication & Resume
+
+### 检查点与故障根因
+
+- Phase 3.5.1 未提交改动已作为独立检查点提交：`930f79c`（`Checkpoint social operator Phase 3.5.1 creator center sync UX`）；提交前 `git diff --check` 通过，提交后工作区干净。
+- 真实页面与源码共同确认：创作者中心“作品”计数显示 83；当前已加载 DOM 有 82 张卡，每张卡同时匹配 `info-title-text` 和 `info-title-operation` 两个候选节点，共 164 个候选，而且同卡两个节点提取文本不同。旧代码只按标题字符串去重，操作区候选被当作第二条作品。页面此前写入 Easel 的历史内容为 120 条，与重复候选机制一致。
+- 跨页去重此前仅精确匹配平台 ID 或原始“发布时间+标题”，未规范 Unicode、空白、日期格式；因此无 ID 或字段格式不一致的同一作品也会重复计数；同标题不同 ID 的不同作品可能错误合并。
+- 分页只搜精确“下一页”标签，固定等待 1.2 秒后仅比较首条作品指纹；平台按钮文案、延迟加载或列表重绘差异会导致提前停止并报告完成。
+- 会话记录仅在进程内存与扩展 `storage.session`，服务重启/浏览器重启后没有页级检查点或续扫位置；扫描受原 10 页上限约束，缺少暂停/继续/结束/取消接口。
+- 对用户报告的线上约 83 与扫描约 120，实际账号的每一条多余记录尚未用已登录页面逐条对照；上列不规范去重键和不可靠分页检查是从代码确认的缺陷机制，具体线上贡献比例仍待真实登录态验证。
+
+### Phase 3.5.3 实施内容
+
+- SQLite 新增 `douyin_sync_sessions`（schema version 6），会话按 account_id 存储状态、期限、来源 URL、扫描唯一记录、原始观测数、重复数、已扫页、末页指纹、续扫提示及预览信息。会话有效期 7 天；历史作品仍只在用户确认统一预览后写入。
+- 服务端两阶段去重：优先 `platform_post_id`；无 ID 时 NFKC、空白/大小写及日期分隔符规范化后按发布时间+标题匹配。ID 后到时可与此前无 ID 组合键记录合并。扫描预览独立显示原始观测、唯一作品、扫描重复和页数。
+- DOM 只把 `info-title-text` 作为作品标题输入，忽略内容不同的 `info-title-operation` 操作区节点，并保留 card identity 去重。
+- 扩展先完成当前页滚动及提取，再提交 SQLite 页检查点，才尝试翻页；检测下一页可用/禁用状态并等待最多 15 秒观察页码或作品列表指纹改变。没有下一页控件且没看到明确“没有更多作品”时保留检查点并暂停；页面声明作品总数时，扫描唯一数不足则暂停而不报告完成。分页保护上限从 10 增至 500 页。
+- 扩展会话码和 Easel 本地地址保存至 `chrome.storage.local`；扩展重开时按会话读取 SQLite 扫描进度。Easel 历史页可查看进度、发出暂停/继续/结束/取消指令并恢复未完成会话；扩展每页轮询指令并在当前页检查点保存后执行。
+- 复用已有 `DouyinCreatorCenterAdapter` 和 HistoricalImportManager Preview/Confirm。Easel 历史作品表与小红书流程没有变更。
+
+### 测试、限制与停点
+
+- 新增持久化重启、账号隔离、ID/组合去重、重复页、状态控制和扩展 CORS 检查；扩展单测覆盖相同标题但不同作品 ID。
+- `.venv/bin/python -m pytest -q`：362 passed、6 skipped；`node --test tests/browser-helper/douyin-sync.test.js`：5 passed，扩展脚本语法检查通过；`npm run build`（含 TypeScript）通过；`npm run lint` 通过并保留两条既有 warning；`git diff --check` 通过。
+- 浏览器调试复用用户已打开的 Chrome Easel 与创作者中心标签，未启动新浏览器进程；真实页面显示作品数 83，DOM 有 82 张作品卡、164 个旧选择器候选（每卡两个不同文本节点），确认旧解析会把操作区文本作为作品候选。Easel 会话创建/取消 UI 已走查；当前扩展握手显示“扩展不可用”，因此未做真实扫描、上传或改写现存 120 条历史内容。重启后的真实扫描仍需用户加载扩展，在原登录标签验收。
+- 本 Phase 不实现 Account Baseline 或 Phase 4；会话预览未确认不落作品表。现存 120 条历史记录未被修改。本记录不授权进入 Phase 4。
+
+## 14. Phase 3.5 执行记录：Full Snapshot Sync 与历史修复预览
+
+### 策略修订与源码实现
+
+- Creator Center 每次同步按完整账号 Snapshot 处理，不再沿用增量写入语义。服务端先校验扫描确实到达末页、平台作品数与去重数一致且没有身份错误；否则只保留扫描检查点，不能标记数据库记录缺失。
+- Snapshot reconciliation 以 `platform_post_id` 为首选身份，退化时使用标准化发布时间+标题。非空旧字段不会被空值覆盖，真实数值 `0` 可更新。只在完整快照确认后才将 DB-only 记录标记为 `MISSING`；不物理删除。
+- 重复快照会刷新同步观察时间；若实际作品事实未变化，则不把已有诊断标为 `STALE`。新增、更新作品事实、归档重复项或首次标记缺失才会触发诊断过期。
+- 增加独立的历史重复修复 Preview / Confirm。Canonical 优先级为平台作品 ID、字段完整度、诊断引用数、最早创建时间；跨重复项补全有效字段，动态指标取最新来源观测，重映射诊断引用后归档并移除活动重复行。
+- Creator Center 中文日期同时保留原始值并归一为带 `+08:00` 的 ISO 时间。历史记录变化会将旧诊断标记为 `STALE`，页面提示重新诊断。
+- 修正 Hook、内容类型、主体与时长的空值展示语义。扩展与历史内容页主操作统一为“同步抖音数据”及全量扫描/快照预览文案。
+
+### 真实数据库与浏览器检查
+
+- 将生产 SQLite 文件复制到临时数据库副本后运行迁移和只读修复预览：当前 202 行、60 个重复组、119 行重复；候选 Canonical 数为 83，119 条重复内容及其诊断引用都能映射。该操作没有确认修复，原生产数据库未写入。
+- 使用用户已经打开的 Chrome 标签检查到 Creator Center 页面标注 `作品 (83)` 且出现“没有更多作品”；Easel 当前服务中仍显示之前生成的 82 条单页预览（并显示 82 条现存扫描项）。因此该预览不能作为新策略的完整快照验收。未操作“确认新增”，没有向真实作品库写入。
+- 页面当前仍加载旧预览/旧服务结果；在更新代码启动并让现有扩展载入新版本后，需要重新扫描全部 83 个作品并检查新 Snapshot Preview，再由用户决定是否确认修复/对账。调试全程复用已打开的浏览器，没有启动新浏览器进程；也没有关闭用户自己的浏览器。
+
+### 自动验证与停点
+
+- `.venv/bin/python -m pytest -q`：367 passed、6 skipped；`npm run build`（含 `tsc -b`）通过；`npm run lint` 通过，有两条既有 warning（`linkifyOutputs.ts` 无用转义、`AccountsPage.tsx` Hook 依赖）；扩展 JS 语法检查通过，Node 测试 5 passed。
+- 真正的 83 条用户账号 Snapshot 尚未用新扩展/新服务生成，因此真实数据完整性验收未通过；当前仅实现完成且修复预览算法在生产库副本得出预期数量。真实库内容保持原样，修复操作仍需显式确认。
+- 本轮停在 Phase 3.5，不进入 Phase 4；开始 Phase 4 的条件是先在原有浏览器环境加载当前扩展与服务版本、生成无误且 83 条完整的全量快照预览，并完成用户对真实修复预览的确认。
+
+## 15. Phase 3.5 同步预览挂起修复
+
+- 根因一：扩展翻页等待代码引用未定义的 `keyList`，扫描在到达预览按钮前会抛错并结束扫描循环。
+- 根因二：Easel 预览前的标签检查会先向后端上报 `ready_to_scan`，覆盖已完成的 `scan_completed` 状态，随后预览 API 因状态不符返回冲突。
+- 根因三：用户在扫描完成后仍可点结束按钮，后端把完成态覆盖成 `end_requested`；若扫描循环已经退出，就没有进程确认这个请求。
+- 修复：移除错误引用；预览标签检查不再更新扫描状态；结束已完成会话保持完成态；暂停/失败等无活跃扫描状态可直接结束；扩展在结束后自动生成预览。提前结束产生 `snapshot_complete=false` 的只读预览，确认按钮禁用，不能写历史或标记缺失。
+- 新增 API 回归测试覆盖完成态预览、提前结束的只读预览、拒绝确认及未写入；扩展回归测试验证预览请求不再覆盖终态。最终测试结果见本轮汇报。
+- 后续使用反馈发现扩展两个按钮的时序和命名仍易混淆：扫描期间请求结束时，手动预览可能先于当前页检查点完成，服务端按状态保护返回“先结束”。现已让扩展在结束请求 pending 时显示等待说明；同一弹窗内结束动作完成后自动预览，弹窗重开后生成预览会收敛无人确认的结束请求。Easel 页将“结束并预览”改为只发出“结束扫描”控制，并按扩展是否仍在扫描分别提示下一步。按钮改名并说明生成预览后需切回 Easel 查看。
+- 本次扩展回归测试：`node --test tests/browser-helper/douyin-sync.test.js` 为 7 passed；`npm run build`、`npm run lint` 与 `git diff --check` 结果见本轮汇报。
+
+## 16. Douyin 桌面导出 XLSX 导入兼容修复
+
+- 使用用户提供的作品列表导出文件验证原解析器：共 82 条作品，因 `作品名称` 未映射至 `title`，82 条均报“标题不能为空”；`体裁`、`点赞量`、`评论量`、`收藏量`、`分享量` 和 `粉丝增量` 也未被识别。
+- 增加上述列名映射；预览新增 `ignored_columns`，前端明示暂未支持保存的审核状态、完播率、5 秒完播率、封面点击率、2 秒跳出率和平均播放时长。平均播放时长没有映射到作品视频时长，避免语义混淆。
+- 验证随附文件：82 行均可解析、0 行字段错误；因为复核使用隔离的无重复仓库替身，导入真实账号时重复/更新数量仍由其现有历史记录决定。
+- 新增桌面导出表头 XLSX 回归测试。定向 Python 测试 11 passed；前端构建通过；Lint 通过并保留两条既有 warning；`git diff --check` 通过。

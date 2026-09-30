@@ -24,9 +24,13 @@
   <input id="base" value="http://localhost:7860" autocomplete="off">
   <button id="detect" class="secondary">检测当前页面并连接</button>
   <button id="scan" class="secondary">开始扫描历史作品</button>
-  <button id="submit">返回 Easel 生成预览</button>
+  <button id="pause" class="secondary">暂停扫描</button>
+  <button id="resume" class="secondary">继续 / 恢复扫描</button>
+  <button id="end" class="secondary">结束扫描并生成预览</button>
+  <button id="cancel" class="secondary">取消扫描</button>
+  <button id="submit">生成预览（完成后切回 Easel 查看）</button>
   <div id="status" role="status">请先在 Easel 创建同步会话，并在当前标签页打开已登录的抖音创作者中心。</div>
-  <div class="hint">只读取创作者中心作品管理页可见信息。扫描会辅助滚动并尝试使用明确的“下一页”按钮；未提交前数据只暂存在此浏览器扩展中。</div>
+  <div class="hint">只读取创作者中心作品管理页可见信息。每完成一页即保存到账号隔离的 Easel 会话，可暂停、续扫或在重启后恢复。</div>
   <script src="merge.js"></script>
   <script src="popup.js"></script>
 </body>

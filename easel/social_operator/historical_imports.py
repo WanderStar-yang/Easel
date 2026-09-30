@@ -24,19 +24,19 @@ PREVIEW_ROW_LIMIT = 100
 _HEADER_ALIASES = {
     "publish_time": "publish_time", "publishtime": "publish_time", "published_at": "publish_time",
     "date": "publish_time", "发布时间": "publish_time", "发布日期": "publish_time",
-    "title": "title", "name": "title", "作品标题": "title", "标题": "title",
-    "content_type": "content_type", "contenttype": "content_type", "内容类型": "content_type", "作品类型": "content_type",
+    "title": "title", "name": "title", "作品标题": "title", "作品名称": "title", "标题": "title",
+    "content_type": "content_type", "contenttype": "content_type", "内容类型": "content_type", "作品类型": "content_type", "体裁": "content_type",
     "content_source": "content_source", "contentsource": "content_source", "内容来源": "content_source",
     "source": "content_source", "tags": "tags", "tag": "tags", "标签": "tags",
     "note": "note", "备注": "note", "duration": "duration", "时长": "duration", "视频时长": "duration",
     "subjects": "subjects", "subject": "subjects", "主体": "subjects", "出镜主体": "subjects",
     "hook_type": "hook_type", "hooktype": "hook_type", "hook类型": "hook_type", "开头类型": "hook_type",
     "views": "views", "view": "views", "播放量": "views", "浏览量": "views", "曝光": "exposure",
-    "exposure": "exposure", "likes": "likes", "like": "likes", "点赞": "likes",
-    "comments": "comments", "comment": "comments", "评论": "comments",
-    "favorites": "favorites", "favorite": "favorites", "收藏": "favorites",
-    "shares": "shares", "share": "shares", "分享": "shares",
-    "followers_gain": "followers_gain", "followersgain": "followers_gain", "涨粉": "followers_gain", "新增粉丝": "followers_gain",
+    "exposure": "exposure", "likes": "likes", "like": "likes", "点赞": "likes", "点赞量": "likes",
+    "comments": "comments", "comment": "comments", "评论": "comments", "评论量": "comments",
+    "favorites": "favorites", "favorite": "favorites", "收藏": "favorites", "收藏量": "favorites",
+    "shares": "shares", "share": "shares", "分享": "shares", "分享量": "shares",
+    "followers_gain": "followers_gain", "followersgain": "followers_gain", "涨粉": "followers_gain", "新增粉丝": "followers_gain", "粉丝增量": "followers_gain",
     "profile_visits": "profile_visits", "profilevisits": "profile_visits", "主页访问": "profile_visits", "主页访问量": "profile_visits",
     "inquiries": "inquiries", "咨询": "inquiries", "私信咨询": "inquiries",
     "platform_post_id": "platform_post_id", "platformpostid": "platform_post_id", "作品id": "platform_post_id",
@@ -103,7 +103,6 @@ class _Preview:
     results: list[dict]
     summary: dict
     source: str = "FILE_IMPORT"
-    update_existing: bool = False
 
 
 class HistoricalImportManager:
@@ -128,7 +127,7 @@ class HistoricalImportManager:
         return self.preview_records(account_id, adapted, headers=headers, source=FileImportAdapter.source)
 
     def preview_records(self, account_id: str, raw_rows: list[dict], *, headers: list[str] | None = None,
-                        source: str, update_existing: bool = False) -> tuple[str, dict]:
+                        source: str) -> tuple[str, dict]:
         platform = self.posts._account_platform(account_id)
         headers = headers if headers is not None else list(dict.fromkeys(key for row in raw_rows for key in row))
         rows: list[dict] = []
@@ -137,6 +136,7 @@ class HistoricalImportManager:
         missing_columns: set[str] = set()
         input_fields = {_HEADER_ALIASES.get(_normalize_header(header)) for header in headers}
         input_fields.discard(None)
+        ignored_columns = [header for header in headers if _normalize_header(header) not in _HEADER_ALIASES]
         if "exposure" in input_fields:
             input_fields.add("views")
         required_metrics = ("publish_time", "content_type", "views", "likes", "comments", "favorites")
@@ -177,8 +177,7 @@ class HistoricalImportManager:
                     seen_keys.add(key)
                     duplicate_id = self.repository.find_duplicate(normalized)
             status = "invalid" if errors else (
-                "update" if duplicate_id and update_existing and normalized.get("platform_post_id")
-                else ("duplicate" if duplicate_id else "ready")
+                "duplicate" if duplicate_id else "ready"
             )
             rows.append(normalized if not errors else mapped)
             results.append({
@@ -200,6 +199,7 @@ class HistoricalImportManager:
                 for field in required_metrics if missing[field] or field in missing_columns
             ],
             "headers": headers,
+            "ignored_columns": ignored_columns,
             "rows": results[:PREVIEW_ROW_LIMIT],
             "preview_truncated": len(results) > PREVIEW_ROW_LIMIT,
         }
@@ -207,7 +207,7 @@ class HistoricalImportManager:
         preview_id = str(uuid4())
         with self._lock:
             self._prune(now)
-            self._previews[preview_id] = _Preview(account_id, now, rows, results, summary, source, update_existing)
+            self._previews[preview_id] = _Preview(account_id, now, rows, results, summary, source)
         return preview_id, summary
 
     def confirm(self, account_id: str, preview_id: str) -> dict:
@@ -222,23 +222,13 @@ class HistoricalImportManager:
                 for row, result in zip(preview.records, preview.results)
                 if result["status"] in {"ready", "update"}
             ]
-            if preview.update_existing:
-                sync_result = self.repository.apply_sync_posts(
-                    account_id, valid_rows, now.isoformat(), source=preview.source,
-                    sync_counts={"scanned_count": preview.summary["scanned_count"],
-                                 "error_count": preview.summary["error_count"]},
-                )
-                inserted_count = sync_result["inserted_count"]
-                duplicate_count = sync_result["duplicate_count"] + preview.summary["duplicate_count"]
-                updated_count = sync_result["updated_count"]
-            else:
-                for _, row in valid_rows:
-                    row.setdefault("data_source", preview.source)
-                    row.setdefault("source_updated_at", now.isoformat())
-                inserted, duplicates = self.repository.create_posts(valid_rows, now.isoformat())
-                inserted_count = len(inserted)
-                duplicate_count = len(duplicates) + preview.summary["duplicate_count"]
-                updated_count = 0
+            for _, row in valid_rows:
+                row.setdefault("data_source", preview.source)
+                row.setdefault("source_updated_at", now.isoformat())
+            inserted, duplicates = self.repository.create_posts(valid_rows, now.isoformat())
+            inserted_count = len(inserted)
+            duplicate_count = len(duplicates) + preview.summary["duplicate_count"]
+            updated_count = 0
             self._previews.pop(preview_id, None)
         return {
             "imported_count": inserted_count,
@@ -247,5 +237,5 @@ class HistoricalImportManager:
             "error_count": preview.summary["error_count"],
             "scanned_count": preview.summary["scanned_count"],
             "data_source": preview.source,
-            "last_sync_at": now.isoformat() if preview.update_existing else None,
+            "last_sync_at": None,
         }

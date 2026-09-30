@@ -499,12 +499,13 @@ async def local_write_guard(request: Request, call_next):
     """
     origin = request.headers.get('origin')
     sync_extension_path = re.fullmatch(
-        r'/api/operator/accounts/[^/]+/posts/sync/sessions/[^/]+/(?:preview|extension-state)', request.url.path,
+        r'/api/operator/accounts/[^/]+/posts/sync/sessions(?:/[^/]+(?:/(?:preview|extension-state|checkpoint|control))?)?',
+        request.url.path,
     )
     if sync_extension_path and origin and re.fullmatch(r'chrome-extension://[a-p]{32}', origin):
         headers = {
             'Access-Control-Allow-Origin': origin,
-            'Access-Control-Allow-Methods': 'POST',
+            'Access-Control-Allow-Methods': 'GET, POST',
             'Access-Control-Allow-Headers': 'Content-Type',
             'Vary': 'Origin',
         }

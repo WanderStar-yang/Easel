@@ -152,7 +152,12 @@ class AccountDiagnosisService:
 
     @staticmethod
     def _to_model(row: dict) -> AccountDiagnosis:
+        report = dict(row["report"])
+        if row.get("status") == "STALE":
+            report["status"] = "STALE"
+            report["stale_at"] = row.get("stale_at")
+            report["stale_reason"] = row.get("stale_reason")
         return AccountDiagnosis(
             id=row["id"], account_id=row["account_id"], generated_at=row["generated_at"],
-            algorithm_version=row["algorithm_version"], report=row["report"],
+            algorithm_version=row["algorithm_version"], report=report,
         )

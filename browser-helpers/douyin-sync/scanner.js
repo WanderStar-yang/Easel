@@ -28,18 +28,23 @@ window.__easelDouyinScanVisible = () => {
     }
     return titleNode.parentElement;
   };
-  const candidates = [...document.querySelectorAll("[class*='info-title-text'], [class*='info-title-operation']")];
+  // The operation wrapper also contains controls and has different text from the
+  // title. Matching it as a second candidate created phantom posts in the real UI.
+  const candidates = [...document.querySelectorAll("[class*='info-title-text']")];
   const rows = [];
-  const seen = new Set();
+  const seenCards = new Set();
   for (const titleNode of candidates) {
     if (!visible(titleNode)) continue;
-    const title = text(titleNode).split('\n')[0].slice(0, 1000);
-    if (!title || seen.has(title)) continue;
+    const title = text(titleNode).split('\n')[0]
+      .replace(/\s*编辑作品\s*设置权限\s*作品置顶\s*删除作品\s*$/, '').trim().slice(0, 1000);
+    if (!title) continue;
     const card = cardFor(titleNode);
+    if (seenCards.has(card)) continue;
+    seenCards.add(card);
     const body = text(card);
     const href = card?.querySelector("a[href*='/video/'], a[href*='/note/']")?.href || '';
     const idMatch = href.match(/\/(?:video|note)\/(\d+)/);
-    const dateMatch = body.match(/(20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{2})?)/);
+    const dateMatch = body.match(/(20\d{2}年\d{1,2}月\d{1,2}日(?:\s+\d{1,2}:\d{2})?|20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{2})?)/);
     const durationMatch = body.match(/(?:时长|视频时长)\s*[:：]?\s*(\d{1,2}:\d{2})/);
     let duration = null;
     if (durationMatch) {
@@ -49,7 +54,8 @@ window.__easelDouyinScanVisible = () => {
     rows.push({
       platform_post_id: idMatch?.[1] || null,
       title,
-      publish_time: dateMatch ? dateMatch[1].replaceAll('/', '-') : null,
+      publish_time: null,
+      publish_time_raw: dateMatch?.[1] || null,
       duration,
       views: valueFor(body, '播放量') ?? valueFor(body, '播放'),
       likes: valueFor(body, '点赞'),
@@ -57,11 +63,32 @@ window.__easelDouyinScanVisible = () => {
       favorites: valueFor(body, '收藏'),
       shares: valueFor(body, '分享'),
     });
-    seen.add(title);
   }
+  const controls = [...document.querySelectorAll('button,[role="button"],a,[aria-label],[title]')]
+    .filter((node) => visible(node));
+  const controlLabel = (node) => `${text(node)} ${node.getAttribute?.('aria-label') || ''} ${node.title || ''}`.trim();
+  const next = controls.find((node) => /下一页|下页|后页|next/i.test(controlLabel(node))
+    && node.getAttribute?.('aria-disabled') !== 'true' && !node.disabled);
+  const disabledNext = controls.some((node) => /下一页|下页|后页|next/i.test(controlLabel(node))
+    && (node.disabled || node.getAttribute?.('aria-disabled') === 'true'));
+  const pageLabel = [...document.querySelectorAll('button,[role="button"],li,span')]
+    .find((node) => node.getAttribute?.('aria-current') === 'page' || /active|current|selected/.test(node.className || ''));
+  const pageNumber = text(pageLabel);
+  const rowKeys = rows.map((row) => row.platform_post_id || `${row.publish_time_raw || row.publish_time || ''}\0${row.title}`).sort();
+  const fingerprint = `${location.pathname}|${pageNumber}|${rowKeys.join('|')}`.slice(0, 500);
+  const pageBody = document.body?.innerText || '';
+  const explicitEnd = /没有更多作品|没有更多内容/.test(pageBody);
+  const totalMatch = pageBody.match(/作品\s*[（(]\s*(\d+)\s*[）)]/);
+  const expectedCount = totalMatch ? Number.parseInt(totalMatch[1], 10) : null;
   return {
     rows,
     pageTitle: document.title,
     loginPrompt: /登录/.test(document.body?.innerText || '') && rows.length === 0,
+    fingerprint,
+    pageNumber,
+    hasNext: Boolean(next) || (!disabledNext && !explicitEnd),
+    explicitEnd,
+    nextLabel: next ? controlLabel(next) : '',
+    expectedCount: Number.isFinite(expectedCount) ? expectedCount : null,
   };
 };

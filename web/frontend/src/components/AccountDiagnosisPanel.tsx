@@ -17,7 +17,9 @@ function metricMedian(summary: Record<string, unknown>, key: string): string {
 
 function postField(post: Record<string, unknown>, key: string): string {
   const value = post[key];
-  return value == null || value === '' ? '—' : String(value);
+  if (Array.isArray(value) && value.length) return value.join('、');
+  if (value != null && value !== '' && !Array.isArray(value)) return String(value);
+  return ({ content_type: '未分类', hook_type: '未标注 / 无数据', subjects: '未标注主体', duration: '暂无数据' } as Record<string, string>)[key] || '—';
 }
 
 function ConfidenceBadge({ confidence }: { confidence: string }) {
@@ -107,7 +109,7 @@ export default function AccountDiagnosisPanel({ account, onClose, onOpenHistory,
               : '请先导入或手动添加历史作品。'}
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {account.platform === 'douyin' && <button className="btn btn-sm btn-primary" onClick={onOpenCreatorSync}>从抖音创作者中心同步</button>}
+            {account.platform === 'douyin' && <button className="btn btn-sm btn-primary" onClick={onOpenCreatorSync}>同步抖音数据</button>}
             <button className="btn btn-sm" onClick={onOpenHistory}>导入 CSV/XLSX</button>
             <button className="btn btn-sm" onClick={onOpenHistory}>手动添加</button>
           </div>
@@ -117,6 +119,11 @@ export default function AccountDiagnosisPanel({ account, onClose, onOpenHistory,
 
       {diagnosis && (
         <div style={{ display: 'grid', gap: 14, marginTop: 16 }}>
+          {diagnosis.status === 'STALE' && (
+            <div role="alert" className="card" style={{ padding: 12, color: 'var(--red)' }}>
+              历史数据已更新，请重新运行账号诊断。当前展示的是更新前报告。
+            </div>
+          )}
           <section className="card" style={{ padding: 14 }}>
             <h3 style={{ margin: '0 0 7px', fontSize: 15 }}>诊断概览</h3>
             <div style={{ fontSize: 13, lineHeight: 1.7 }}>{diagnosis.overview}</div>

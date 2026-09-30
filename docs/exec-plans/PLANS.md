@@ -358,7 +358,7 @@ REVIEWING
 - 采集字段限于 platform_post_id、title、publish_time、duration、views/play_count、likes、comments、favorites、shares。不可见字段为 `null`；指标数值 `0` 保留为真实零值。
 - 采集过程不推断 REAL/AI、猫主体、Hook、Content Pillar、话题或其他分类；已有用户标签在更新时保留。
 - 抖音作品来源记录 `DOUYIN_OPEN_API`、`DOUYIN_CREATOR_CENTER`、`FILE_IMPORT` 或 `MANUAL`；同时记录 `source_updated_at`，账号级保存 `last_sync_at`。
-- 有 `platform_post_id` 时按账号范围 upsert 可变化的指标，不产生重复帖子；无作品 ID 时复用 Phase 2 (account_id, platform, publish_time, title) 去重。导入预览分别汇总扫描、新增、将更新、重复、缺字段及错误行。只有明确确认后才写库。既有 CSV/XLSX 手工导入重复仍可跳过，不覆盖。
+- Creator Center 每次执行 Full Snapshot Sync + Snapshot Reconciliation；禁止 append-only、增量推送与 High Water Mark。预览含平台唯一作品、数据库当前记录、新增、更新、扫描重复、历史重复、平台缺失、发布时间回填和错误。只有用户确认完整快照后才对账；既有 CSV/XLSX 导入仍保留原有预览确认和重复跳过行为。
 - 最近同步完成只显示数量并提供“重新运行首次诊断”；不自动执行 Phase 3 Diagnosis。完整度继续由 `HistoricalPostService.completeness()` 依据实际字段计算，不与来源绑定。
 
 ## API / UI
@@ -395,6 +395,32 @@ REVIEWING
 ## 复用与验收
 
 复用 Phase 3.5 Chrome MV3 Helper、account-scoped session API、Phase 2 HistoricalImportManager 和确认 API。人工验收应使用真实本地 Easel UI/后端走到“等待用户登录/开始扫描”，不要求访问真实用户作品；另报告真实 Creator Center 页面和登录状态未验证的限制。
+
+---
+
+# 8.7 Phase 3.5.3 - Douyin Sync Deduplication & Resume
+
+本插入阶段只修复 Creator Center 同步正确性，不实现 Phase 4。
+
+- 通过 `platform_post_id` 优先、规范化发布时间+标题兜底的两阶段去重；分别报告原始观测、唯一作品和扫描重复数。
+- DOM 只读作品标题节点，不把作品卡片中的编辑、权限和删除操作区解析为独立作品。
+- 将账号隔离的扫描会话与逐页检查点持久化到 Easel SQLite；保存页数、末页指纹与下一页提示，允许在 7 天会话期限内从已保存状态恢复。
+- 翻页须通过页码或作品列表变化确认。没有可确认的下一页控件、翻页超时、重复页时保留检查点并暂停，不得假报扫完。若来源页面显示作品总数，唯一数不足时也不得标记完成。
+- 扩展与 Easel 同步向导支持暂停、继续、结束和取消；扩展关闭/重开及 Easel 服务重启不丢失已保存扫描页。
+- 最终数据仍走 Phase 2 Preview / Confirm；取消或预览前不写入 HistoricalPost。
+- 合成页面测试覆盖重复与同名异作，SQLite/API 测试覆盖进程重启和双账号隔离；真实页面验收需用户在已登录 Creator Center 中执行。
+
+## 8.8 Phase 3.5 Snapshot Sync Strategy Adjustment
+
+本节是 Phase 3.5 的产品策略修订，取代 8.5–8.7 中关于 Creator Center 增量写入/同步确认的早期实现描述：
+
+- 每次同步扫描 Creator Center 全部历史作品，Session 按平台 ID 或稳定指纹去重；续扫继续使用原 session 的 `seen_post_ids`。
+- 只能对完整且无行级身份错误的全量 Snapshot 生成可确认预览；未到末页或平台计数不符时只保留检查点，不确认缺失状态。
+- 提前结束允许为已保存检查点生成只读部分预览；部分预览不能确认同步、不能写入作品或标记 DB-only 记录缺失。
+- Preview → Confirm 后执行幂等 reconciliation：ID 优先，发布时间+标题指纹兜底；null 保留旧非空值，真实 0 可更新；完整快照中不存在的记录标记 MISSING，不删除。
+- 历史重复修复独立提供 Preview / Confirm，按 Canonical 排序规则合并、重映射所有报告引用、归档并移除重复活动记录。
+- Douyin 日期支持 `YYYY年MM月DD日 HH:mm`，保留 `publish_time_raw` 并保存北京时间 ISO 值。任何历史作品变化会让 AccountDiagnosis 成为 STALE。
+- 本修订禁止自动确认真实账号修复；没有明确人工确认不得执行真实库合并/删除。
 
 ---
 
