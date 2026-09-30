@@ -9,17 +9,18 @@ All notable changes to Easel are documented in this file.
 - Added isolated Social Operator business accounts for Douyin and Xiaohongshu, with per-account Profile and Strategy records, a server-validated lifecycle, an `/api/operator/accounts` API, and a separate business-account section on the Accounts page. The platform-login account API remains unchanged.
 - Added account-scoped historical post management for Social Operator accounts: manual CRUD, CSV/XLSX preview and explicit confirmation, row validation, duplicate skipping, platform metrics, and a weighted data-completeness service for later diagnosis.
 - Added the reusable Account Intelligence Engine and persisted Initial Diagnosis reports for Douyin and Xiaohongshu, with evidence-linked metrics, confidence-aware comparisons, platform-specific Top/Low ranking, and an optional explanation through Easel's existing OpenClaw gateway.
-- Added a unified historical source-adapter path and a Chrome helper for user-initiated Douyin Creator Center DOM scanning. Creator Center scans require full-snapshot preview and explicit reconciliation confirmation; diagnosis is not triggered automatically.
-- Added honest Douyin OpenAPI configuration status and a permission-application link; real OpenAPI authorization and video.list/video.data calls remain unimplemented until credentials and approved permissions are available.
-- Made Douyin Creator Center assisted sync the primary V1 path, added a first-diagnosis data gate and guided sync wizard, and wired extension-reported connection/login/page/scan states into the account-scoped sync session. OpenAPI now appears only under advanced import options; CSV/XLSX and manual entry remain available.
-- Added durable account-scoped Douyin scan sessions with page checkpoints, 7-day resume, platform-ID/fingerprint deduplication, raw/unique/duplicate progress, and pause/resume/end/cancel controls. Pagination now requires observed page changes and pauses with saved progress when it cannot confirm continuation.
-- Replaced Creator Center append-only metric sync with full-snapshot preview and reconciliation, explicit missing-presence markers, archive-first duplicate repair, Chinese publish-time normalization, diagnosis staleness, and account-scoped repair/snapshot APIs.
-- Kept diagnoses current when a repeated snapshot refreshes only observation timestamps and all historical facts remain unchanged.
-- Fixed live Creator Center card scanning to read only the title node, not the separate edit/permissions operation text; incomplete counts against the creator center's declared work total remain paused for review.
-- Fixed scan termination and preview return: ending a completed scan now preserves its state, the extension auto-returns a preview after stopping, and incomplete scans get a read-only preview that cannot be confirmed.
-- Fixed page-change detection in the extension and prevented preview-page inspection from overwriting the scan's completed state.
-- Clarified the Douyin extension's end/preview controls: ending a running scan now visibly waits for the current page checkpoint and auto-generates preview; manual preview waits for or recovers a pending end request. Button labels now say to switch back to Easel after preview generation rather than implying the extension navigates there.
-- Fixed Douyin desktop-export XLSX headers so all 82 works in the supplied format parse successfully; unsupported review/retention columns are now listed in the import preview instead of being silently dropped.
+- Added an official Douyin Creator Center XLSX parser and Snapshot Reconciliation flow. The parser maps platform headers, preserves original genre values, lists unsupported columns, updates existing posts without overwriting with blanks, and marks existing diagnoses stale after confirmed additions, updates, or repairs.
+- Removed the Social Operator Douyin browser helper, DOM scanner, sync sessions/API, extension CORS exception, sync wizard, and OpenAPI placeholder. Easel platform login/publishing and generic CSV/XLSX/manual history entry remain. Historical duplicate repair now separates stable automatic groups from low-confidence groups that require explicit per-group user confirmation.
+
+### Improved
+
+- Improved Initial Diagnosis with a canonical unique-post view, user-readable summaries and confidence explanations, understandable missing-data language, stale-report collapse, and a reordered diagnosis page. Official Douyin XLSX rows now anchor repair of uniquely matched legacy browser-scan records.
+- Added account-scoped batch classification for historical posts (REAL/AI/MIXED, content type, and subjects) so users can prepare data for future content comparisons.
+
+### Fixed
+
+- Fixed diagnosis counts and Top/Low rankings consuming duplicate and stale scan rows; the user's current Douyin database was repaired from 284 raw rows to 82 active canonical posts, with 202 legacy scan rows archived.
+- Fixed creator-center action text leaking into legacy titles and “unknown” Hook/source/duration values being presented as observed content facts.
 
 ## [0.2.1] - 2026-09-24
 

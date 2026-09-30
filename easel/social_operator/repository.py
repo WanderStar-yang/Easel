@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 from datetime import datetime, timezone
+from .canonical import clean_title
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = PROJECT_ROOT / "outputs" / "_social_operator.sqlite3"
@@ -18,11 +18,8 @@ def datetime_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_CREATOR_CONTROLS = re.compile(r"\s*编辑作品\s*设置权限\s*作品置顶\s*删除作品\s*$")
-
-
-def clean_creator_center_title(value: str) -> str:
-    return _CREATOR_CONTROLS.sub("", value or "").strip()
+def clean_legacy_scan_title(value: str) -> str:
+    return clean_title(value)
 
 
 def _remap_report_references(report: dict[str, Any], id_map: dict[str, str]) -> dict[str, Any]:
@@ -117,6 +114,7 @@ class OperatorAccountRepository:
                     publish_time_raw TEXT,
                     title TEXT NOT NULL,
                     content_type TEXT,
+                    content_type_raw TEXT,
                     content_source TEXT NOT NULL CHECK (content_source IN ('REAL', 'AI', 'MIXED', 'UNKNOWN')),
                     tags_json TEXT NOT NULL DEFAULT '[]',
                     note TEXT,
@@ -164,28 +162,6 @@ class OperatorAccountRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_account_diagnoses_latest
                     ON account_diagnoses(account_id, generated_at DESC, id DESC);
-                CREATE TABLE IF NOT EXISTS douyin_sync_sessions (
-                    id TEXT PRIMARY KEY,
-                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
-                    status TEXT NOT NULL,
-                    extension_available INTEGER NOT NULL DEFAULT 0,
-                    message TEXT NOT NULL DEFAULT '',
-                    source_url TEXT NOT NULL DEFAULT '',
-                    scan_rows_json TEXT NOT NULL DEFAULT '[]',
-                    raw_observation_count INTEGER NOT NULL DEFAULT 0,
-                    duplicate_count INTEGER NOT NULL DEFAULT 0,
-                    pages_scanned INTEGER NOT NULL DEFAULT 0,
-                    last_page_fingerprint TEXT,
-                    next_page_hint TEXT,
-                    expected_count INTEGER,
-                    preview_id TEXT,
-                    summary_json TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_douyin_sync_sessions_account
-                    ON douyin_sync_sessions(account_id, updated_at DESC);
                 """
             )
             # Additive migration: preserve databases created by the Phase 1–3 schemas.
@@ -203,6 +179,8 @@ class OperatorAccountRepository:
                 conn.execute("ALTER TABLE historical_posts ADD COLUMN source_updated_at TEXT")
             if "publish_time_raw" not in post_columns:
                 conn.execute("ALTER TABLE historical_posts ADD COLUMN publish_time_raw TEXT")
+            if "content_type_raw" not in post_columns:
+                conn.execute("ALTER TABLE historical_posts ADD COLUMN content_type_raw TEXT")
             if "source_presence" not in post_columns:
                 conn.execute("ALTER TABLE historical_posts ADD COLUMN source_presence TEXT NOT NULL DEFAULT 'PRESENT'")
             if "missing_since" not in post_columns:
@@ -214,10 +192,7 @@ class OperatorAccountRepository:
                 conn.execute("ALTER TABLE account_diagnoses ADD COLUMN stale_at TEXT")
             if "stale_reason" not in diagnosis_columns:
                 conn.execute("ALTER TABLE account_diagnoses ADD COLUMN stale_reason TEXT")
-            sync_session_columns = {row["name"] for row in conn.execute("PRAGMA table_info(douyin_sync_sessions)")}
-            if "expected_count" not in sync_session_columns:
-                conn.execute("ALTER TABLE douyin_sync_sessions ADD COLUMN expected_count INTEGER")
-            conn.execute("PRAGMA user_version = 7")
+            conn.execute("PRAGMA user_version = 8")
 
     def seed_defaults(self, now: str) -> None:
         seeds = (
@@ -360,6 +335,35 @@ class OperatorAccountRepository:
                                (account_id,)).fetchone()
         return int(row["total"])
 
+    def count_archived_posts(self, account_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS total FROM historical_post_archive WHERE account_id = ?", (account_id,)).fetchone()
+        return int(row["total"])
+
+    def clean_archived_legacy_titles(self, account_id: str) -> int:
+        cleaned = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT post_id, payload_json FROM historical_post_archive WHERE account_id = ?", (account_id,),
+            ).fetchall()
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if payload.get("data_source") != "DOUYIN_CREATOR_CENTER":
+                    continue
+                title = payload.get("title") or ""
+                clean = clean_legacy_scan_title(title)
+                if clean != title:
+                    payload["title"] = clean
+                    conn.execute(
+                        "UPDATE historical_post_archive SET payload_json = ? WHERE account_id = ? AND post_id = ?",
+                        (json.dumps(payload, ensure_ascii=False), account_id, row["post_id"]),
+                    )
+                    cleaned += 1
+        return cleaned
+
     def get_sync_status(self, account_id: str) -> dict[str, Any]:
         with self._connect() as conn:
             row = conn.execute(
@@ -370,70 +374,6 @@ class OperatorAccountRepository:
             raise AccountNotFoundError(account_id)
         return {"last_sync_at": row["last_sync_at"], "last_sync_source": row["last_sync_source"],
                 "last_sync_counts": json.loads(row["last_sync_counts_json"] or "{}")}
-
-    @staticmethod
-    def _sync_session(row: sqlite3.Row) -> dict[str, Any]:
-        return {
-            "session_id": row["id"], "account_id": row["account_id"], "status": row["status"],
-            "extension_available": bool(row["extension_available"]), "message": row["message"],
-            "source_url": row["source_url"], "scan_rows": json.loads(row["scan_rows_json"] or "[]"),
-            "raw_observation_count": int(row["raw_observation_count"]),
-            "unique_count": len(json.loads(row["scan_rows_json"] or "[]")),
-            "duplicate_count": int(row["duplicate_count"]), "pages_scanned": int(row["pages_scanned"]),
-            "last_page_fingerprint": row["last_page_fingerprint"], "next_page_hint": row["next_page_hint"],
-            "expected_count": row["expected_count"],
-            "preview_id": row["preview_id"],
-            "summary": json.loads(row["summary_json"]) if row["summary_json"] else None,
-            "created_at": row["created_at"], "updated_at": row["updated_at"],
-            "expires_at": row["expires_at"],
-        }
-
-    def create_sync_session(self, values: dict[str, Any]) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO douyin_sync_sessions "
-                "(id, account_id, status, message, created_at, updated_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (values["session_id"], values["account_id"], values["status"], values["message"],
-                 values["created_at"], values["updated_at"], values["expires_at"]),
-            )
-
-    def get_sync_session(self, account_id: str, session_id: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM douyin_sync_sessions WHERE account_id = ? AND id = ? AND expires_at > ?",
-                (account_id, session_id, datetime_now_iso()),
-            ).fetchone()
-        return self._sync_session(row) if row else None
-
-    def list_sync_sessions(self, account_id: str, *, limit: int = 10) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM douyin_sync_sessions WHERE account_id = ? AND expires_at > ? "
-                "ORDER BY updated_at DESC LIMIT ?", (account_id, datetime_now_iso(), limit),
-            ).fetchall()
-        return [self._sync_session(row) for row in rows]
-
-    def update_sync_session(self, account_id: str, session_id: str, values: dict[str, Any]) -> dict[str, Any] | None:
-        allowed = {
-            "status", "extension_available", "message", "source_url", "scan_rows_json",
-            "raw_observation_count", "duplicate_count", "pages_scanned", "last_page_fingerprint",
-            "next_page_hint", "expected_count", "preview_id", "summary_json", "updated_at", "expires_at",
-        }
-        updates = {key: value for key, value in values.items() if key in allowed}
-        if not updates:
-            return self.get_sync_session(account_id, session_id)
-        if "extension_available" in updates:
-            updates["extension_available"] = int(bool(updates["extension_available"]))
-        assignments = ", ".join(f"{key} = ?" for key in updates)
-        with self._connect() as conn:
-            cursor = conn.execute(
-                f"UPDATE douyin_sync_sessions SET {assignments} WHERE account_id = ? AND id = ? AND expires_at > ?",
-                (*updates.values(), account_id, session_id, datetime_now_iso()),
-            )
-            if cursor.rowcount == 0:
-                return None
-        return self.get_sync_session(account_id, session_id)
 
     def record_sync(self, account_id: str, source: str, counts: dict[str, int], synced_at: str) -> None:
         with self._connect() as conn:
@@ -482,7 +422,7 @@ class OperatorAccountRepository:
 
     def create_posts(self, posts: list[tuple[str, dict[str, Any]]], now: str) -> tuple[list[str], list[tuple[str, str]]]:
         columns = (
-            "account_id", "platform", "publish_time", "publish_time_raw", "title", "content_type", "content_source",
+            "account_id", "platform", "publish_time", "publish_time_raw", "title", "content_type", "content_type_raw", "content_source",
             "tags_json", "note", "duration", "subjects_json", "hook_type", "views", "likes",
             "comments", "favorites", "shares", "followers_gain", "profile_visits", "inquiries",
             "platform_post_id", "data_source", "source_updated_at",
@@ -549,11 +489,14 @@ class OperatorAccountRepository:
                                (account_id, duplicate_id)).fetchone()
             if row is None:
                 continue
+            archived_payload = dict(row)
+            if archived_payload.get("data_source") == "DOUYIN_CREATOR_CENTER":
+                archived_payload["title"] = clean_legacy_scan_title(archived_payload.get("title") or "")
             conn.execute(
                 "INSERT OR REPLACE INTO historical_post_archive "
                 "(account_id, post_id, canonical_id, payload_json, archived_at) VALUES (?, ?, ?, ?, ?)",
                 (account_id, duplicate_id, canonical_id,
-                 json.dumps(dict(row), ensure_ascii=False), now),
+                 json.dumps(archived_payload, ensure_ascii=False), now),
             )
             conn.execute("DELETE FROM historical_posts WHERE account_id = ? AND id = ?",
                          (account_id, duplicate_id))
@@ -564,7 +507,7 @@ class OperatorAccountRepository:
     def _write_post(conn: sqlite3.Connection, account_id: str, post_id: str, values: dict[str, Any],
                     now: str, *, insert: bool) -> None:
         columns = (
-            "account_id", "platform", "publish_time", "publish_time_raw", "title", "content_type",
+            "account_id", "platform", "publish_time", "publish_time_raw", "title", "content_type", "content_type_raw",
             "content_source", "tags_json", "note", "duration", "subjects_json", "hook_type", "views",
             "likes", "comments", "favorites", "shares", "followers_gain", "profile_visits", "inquiries",
             "platform_post_id", "data_source", "source_updated_at", "source_presence", "missing_since",
@@ -589,25 +532,6 @@ class OperatorAccountRepository:
                 f"UPDATE historical_posts SET {assignments}, updated_at = ? WHERE account_id = ? AND id = ?",
                 (*update_values, now, account_id, post_id),
             )
-
-    @staticmethod
-    def _snapshot_facts_changed(current: sqlite3.Row, values: dict[str, Any]) -> bool:
-        """Ignore observation timestamps when deciding whether diagnosis inputs changed."""
-        json_fields = {"tags": "tags_json", "subjects": "subjects_json"}
-        fields = (
-            "platform", "publish_time", "publish_time_raw", "title", "content_type", "content_source",
-            "tags", "note", "duration", "subjects", "hook_type", "views", "likes", "comments",
-            "favorites", "shares", "followers_gain", "profile_visits", "inquiries", "platform_post_id",
-            "source_presence", "missing_since",
-        )
-        for field in fields:
-            column = json_fields.get(field, field)
-            incoming = values.get(field)
-            if field in json_fields:
-                incoming = json.dumps(incoming or [], ensure_ascii=False)
-            if current[column] != incoming:
-                return True
-        return False
 
     @staticmethod
     def _apply_reference_remap(conn: sqlite3.Connection, account_id: str, id_map: dict[str, str]) -> None:
@@ -664,9 +588,10 @@ class OperatorAccountRepository:
                 else:
                     if current["publish_time"] is None and operation["values"].get("publish_time"):
                         backfilled += 1
-                    historical_changed = historical_changed or self._snapshot_facts_changed(
-                        current, operation["values"],
-                    )
+                    # A row matched and refreshed by a newly confirmed official
+                    # export is an update event for diagnosis freshness, even when
+                    # the current metric values happen to be identical.
+                    historical_changed = True
                     self._write_post(conn, account_id, canonical_id, operation["values"], now, insert=False)
                     updated += 1
                 mapping = self._archive_and_delete(conn, account_id, operation["duplicate_ids"], canonical_id, now)
@@ -689,7 +614,7 @@ class OperatorAccountRepository:
                       "platform_missing_count": marked_missing, "publish_time_backfill_count": backfilled}
             conn.execute(
                 "UPDATE operator_accounts SET last_sync_at = ?, last_sync_source = ?, last_sync_counts_json = ?, updated_at = ? WHERE id = ?",
-                (now, "DOUYIN_CREATOR_CENTER", json.dumps(counts), now, account_id),
+                (now, "DOUYIN_OFFICIAL_EXPORT", json.dumps(counts), now, account_id),
             )
         return {"inserted_count": inserted, "updated_count": updated, "archived_duplicate_count": archived,
                 "platform_missing_count": marked_missing, "publish_time_backfill_count": backfilled,
@@ -721,6 +646,31 @@ class OperatorAccountRepository:
             )
             self._mark_diagnoses_stale(conn, account_id, now, "historical_posts_changed")
         return self.get_post(account_id, post_id)
+
+    def classify_posts(self, account_id: str, post_ids: list[str], values: dict[str, Any], now: str) -> int:
+        allowed = {"content_source", "content_type", "subjects"}
+        if not post_ids or not values or set(values) - allowed:
+            raise ValueError("请选择作品并提供有效分类")
+        with self._connect() as conn:
+            placeholders = ",".join("?" for _ in post_ids)
+            found = {row["id"] for row in conn.execute(
+                f"SELECT id FROM historical_posts WHERE account_id = ? AND id IN ({placeholders})",
+                (account_id, *post_ids),
+            ).fetchall()}
+            if found != set(post_ids):
+                raise LookupError("所选作品不属于当前账号或已不存在")
+            columns = {"content_source": "content_source", "content_type": "content_type", "subjects": "subjects_json"}
+            for post_id in post_ids:
+                assignments, params = [], []
+                for field, value in values.items():
+                    assignments.append(f"{columns[field]} = ?")
+                    params.append(json.dumps(value, ensure_ascii=False) if field == "subjects" else value)
+                conn.execute(
+                    f"UPDATE historical_posts SET {', '.join(assignments)}, updated_at = ? WHERE account_id = ? AND id = ?",
+                    (*params, now, account_id, post_id),
+                )
+            self._mark_diagnoses_stale(conn, account_id, now, "historical_posts_classified")
+        return len(post_ids)
 
     def delete_post(self, account_id: str, post_id: str) -> bool:
         with self._connect() as conn:

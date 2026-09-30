@@ -8,6 +8,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from .historical import HistoricalPostService
+from .canonical import canonical_unique_posts, suspected_duplicate_count
 from .intelligence import ALGORITHM_VERSION, AccountIntelligenceEngine
 from .models import AccountDiagnosis, AccountStatus
 from .repository import OperatorAccountRepository
@@ -114,7 +115,8 @@ class AccountDiagnosisService:
 
     def diagnose(self, account_id: str) -> AccountDiagnosis:
         account = self.accounts.get_account(account_id)
-        rows = self.repository.list_posts(account_id, limit=100000)
+        raw_rows = self.repository.list_posts(account_id, limit=100000)
+        rows = canonical_unique_posts(raw_rows)
         if not rows:
             raise InsufficientHistoryError("暂无历史内容，请先导入历史数据。")
         if account.status not in {AccountStatus.NEW, AccountStatus.IMPORTING, AccountStatus.DIAGNOSING}:
@@ -128,7 +130,13 @@ class AccountDiagnosisService:
 
         account_row = self.repository.get_account(account_id)
         completeness = self.posts.completeness(account_id)
-        report = self.engine.analyze(account=account_row, posts=rows, completeness=completeness)
+        report = self.engine.analyze(
+            account=account_row, posts=rows, completeness=completeness,
+            raw_record_count=len(raw_rows),
+            excluded_stale_count=sum(row.get("source_presence") == "MISSING" for row in raw_rows),
+            suspected_duplicates=suspected_duplicate_count(raw_rows),
+            archived_legacy_count=self.repository.count_archived_posts(account_id),
+        )
         generated_at = self._now()
         report["generated_at"] = generated_at
         report["ai_explanation"] = self.explainer.explain(report)

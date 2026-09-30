@@ -339,88 +339,54 @@ REVIEWING
 
 ---
 
-# 8.5 Phase 3.5 - Douyin Historical Data Acquisition
+# 8.5 Phase 3.5 - Douyin Official Export Import Compatibility
 
-## 目标
+## 目标与范围
 
-低成本、可审阅地将用户本人抖音账号的历史作品事实数据同步到 `HistoricalPost`，同时保持数据来源可替换。只处理历史作品和平台实际展示的指标，不执行内容分类。
+V1 抖音历史数据以 PC 端抖音创作者中心官方导出的作品列表 XLSX 为主数据来源。本阶段只完成官方文件识别、字段适配、导入预览、确认后的 Snapshot Reconciliation、旧历史重复修复和诊断过期联动；不开发账号基线或后续运营能力。
 
-## 复用与架构
+浏览器辅助扩展、DOM 扫描、Creator Center Sync Session、会话 API、翻页/续扫、OpenAPI 占位界面均已退出 V1。Easel 原有平台登录和发布、Social Operator Account Diagnosis、HistoricalPost、通用 CSV/XLSX 导入及人工录入继续保留。
 
-- Phase 2 `HistoricalImportService` 的行标准化、校验、重复检查、预览与确认写库；OpenAPI、Creator Center、CSV/XLSX 批量来源统一走 Preview → Confirm → Persist。手工表单在用户点击保存时确认后写入。
-- Phase 3 Intelligence Engine 继续只读取 `HistoricalPost`，不得直接耦合抖音 API 或浏览器。
-- 新增 `HistoricalDataSourceAdapter` 接口与 `DouyinOpenApiAdapter`、`DouyinCreatorCenterAdapter`、`FileImportAdapter`、`ManualInputAdapter`。Creator Center Assisted Sync 是抖音 V1 默认主入口；OpenAPI 仅作为次要高级选项，无正式密钥或权限时显示“未配置”，不得阻止其他方式，也不得返回伪造作品。
-- 现有 Easel 有 Playwright 登录态抓取，但未提供创作者中心用户主动查看页面的 DOM 读取通道。Creator Center 使用最小 Chrome Manifest V3 Browser Helper：仅响应用户在 `creator.douyin.com` 上的主动扫描操作，读取当前渲染的可见 DOM；用户翻页后可继续扫描并累计。扩展不得读凭证/Cookie、自动登录、绕过验证码或调用私有 API。若页面结构不匹配，显示无法识别并允许用户改用 CSV/人工录入。
+## 实施依据与数据规则
 
-## 同步与数据规则
-
-- 业务 UI 先为指定 `douyin-pet` 创建一个限时同步会话；扩展检查当前标签页域名、会话状态并发送扫描结果。不得仅凭客户端 accountId 接受跨账号或过期会话。
-- 采集字段限于 platform_post_id、title、publish_time、duration、views/play_count、likes、comments、favorites、shares。不可见字段为 `null`；指标数值 `0` 保留为真实零值。
-- 采集过程不推断 REAL/AI、猫主体、Hook、Content Pillar、话题或其他分类；已有用户标签在更新时保留。
-- 抖音作品来源记录 `DOUYIN_OPEN_API`、`DOUYIN_CREATOR_CENTER`、`FILE_IMPORT` 或 `MANUAL`；同时记录 `source_updated_at`，账号级保存 `last_sync_at`。
-- Creator Center 每次执行 Full Snapshot Sync + Snapshot Reconciliation；禁止 append-only、增量推送与 High Water Mark。预览含平台唯一作品、数据库当前记录、新增、更新、扫描重复、历史重复、平台缺失、发布时间回填和错误。只有用户确认完整快照后才对账；既有 CSV/XLSX 导入仍保留原有预览确认和重复跳过行为。
-- 最近同步完成只显示数量并提供“重新运行首次诊断”；不自动执行 Phase 3 Diagnosis。完整度继续由 `HistoricalPostService.completeness()` 依据实际字段计算，不与来源绑定。
+- 复用 `HistoricalPost`、Phase 2 CSV/XLSX 读取与人工录入能力，以及 Phase 3 Account Diagnosis；仅为官方 XLSX 增加 `DouyinCreatorExportParser` 和 `SnapshotReconciliationManager`。
+- 官方列映射包括作品名称、发布时间、作品 ID/内容 ID、播放量/曝光量、点赞量、评论量、收藏量、分享量、粉丝增量；体裁存入 `content_type_raw`。新出现的未支持列展示为暂未纳入 V1 诊断的字段，不阻止导入。
+- 每次上传按 Snapshot 预览。平台作品 ID 优先作为身份；没有 ID 时使用规范化发布时间+标题。低置信度匹配会在预览中提示；缺失发布时间不报错、不填当前时间。
+- 新文件更新非空平台事实，空值不覆盖已有值，真实 `0` 可覆盖。新增/更新作品和确认合并修复会使已有 Diagnosis 标记为 `STALE`；新快照确认更新已有行时也会提示重新诊断。
+- 历史数据修复支持稳定键自动合并和弱键人工复核；确认时执行自动合并项及用户明确勾选的人工确认组，Canonical ID 保留，诊断引用映射后归档重复项。
 
 ## API / UI
 
-- 在现有历史帖子路由下增加开始同步会话、查询会话预览和 OpenAPI 配置状态端点；扩展上送可见 DOM 记录。预览结果最终通过同一 HistoricalImportService 和既有确认写入合同保存。
-- 抖音账号历史页主操作为“从抖音创作者中心同步”，提供扩展安装、真实握手、打开创作者中心、用户自行登录、页面检测、扫描、预览和确认。CSV/XLSX 与手动新增留在“其他导入方式”，OpenAPI 放高级选项。
-- 小红书 UI、数据入口和导入逻辑不变。Easel 的原有 `/api/accounts`、登录、发布能力与页面合同保持兼容。
+- 保留账号隔离的 HistoricalPost CRUD、通用文件预览/确认、完整度、诊断及修复 Preview/Confirm API。
+- 官方 XLSX 从现有 `/posts/imports/preview` 自动识别；快照通过 `/posts/imports/snapshot-confirm` 明确确认。
+- 抖音历史页主按钮为「导入抖音作品数据」，说明用户先从 PC 创作者中心导出作品列表 XLSX；同时保留手动添加及折叠的其他 CSV/XLSX 入口。
+- 预览展示识别平台、文件记录、可识别、新增/更新/重复/错误、缺失字段、低置信度提示、暂未纳入 V1 的列和样例行。
 
-## 验收与测试
+## 验收
 
-- Creator Center 未登录、已登录、空列表、多页累计、缺失指标、实际零指标、错误 DOM 与扫描失败。
-- 同步来源、过期/跨账号会话隔离、平台作品 ID upsert、无 ID 重复规则、第二次同步的插入/更新、last_sync_at/source_updated_at。
-- Preview 阶段不写业务数据库；确认后原子持久化；Phase 3 可读取同步数据；小红书隔离。
-- CSV/XLSX 和人工 CRUD 回归，旧 `/api/accounts` 保持可用。
-- OpenAPI 无凭据/权限时只返回未配置状态。无授权环境时使用合成 DOM 样本测试适配器，不写死真实用户数据。
+覆盖真实格式 XLSX 表头、字段映射、未知列、空值、数字/日期、重复上传、第二次指标更新、真实零值、null 保留、诊断 stale、账号隔离和旧浏览器同步代码移除。确认 Easel 原有平台登录/发布路由与小红书历史内容流程仍可用。完成 Phase 3.5 后停止，Phase 4 仍需用户单独确认。
 
 ---
 
-# 8.6 Phase 3.5.1 - Douyin Creator Center Sync UX Fix
+# 8.6 Phase 3.6 - Diagnosis UX & Data Integrity
 
-## 目标与边界
+## 范围
 
-把 Phase 3.5 已有的扩展扫描、同步会话和 Phase 2 Preview/Confirm 串成可发现、可反馈的产品主流程。本阶段不重做采集器、不接真实 OpenAPI、不实现 Phase 4。
+只修复 Initial Diagnosis 的数据可信度与用户体验；不建立 Account Baseline，不进入 Phase 4。
 
-## 用户流程
+## 必须完成
 
-1. 首次诊断页面先查询当前账号 HistoricalPost 数量；数量为 0 时禁止运行诊断并引导先准备数据。抖音主按钮是“从抖音创作者中心同步”，CSV/XLSX 与手动添加为辅助入口。
-2. 启动 account-scoped、限时会话；未握手时明确显示扩展不可用及 Chrome 加载未打包扩展指引。
-3. Chrome 扩展主动回报状态，主应用显示 `Extension unavailable/available`、`Creator Center tab not found`、`not logged in`、`unsupported page`、`ready to scan`、`scanning`、`scan completed/failed`。
-4. 用户从主应用打开创作者中心新标签页，并自行登录；扩展仅在用户点击时读取可见 DOM，辅助滚动和可识别分页，不读取凭证或 Cookie。
-5. 扫描数据必须回到 Phase 2 统一预览；只有用户点击确认才持久化。成功后显示作品数量和主动运行首次诊断按钮。
-6. OpenAPI 移到其他同步方式中的高级设置，不成为默认前置。CSV/XLSX 和手动添加继续可用。
+- 所有诊断统计使用 account-scoped canonical unique HistoricalPost；Top/Low、样本量、中位数、内容分布和比较不得重复计数。
+- 对官方 Douyin XLSX 和旧浏览器数据执行预览确认式修复；官方记录优先，旧扫描记录保留归档载荷；不稳定身份的记录需明确提示人工复核。
+- 区分 raw、有效唯一作品和诊断样本数量；普通页面显示有效作品数，raw/source/阈值/算法字段折叠到技术详情。
+- Stale 诊断顶部显示过期提示并折叠旧正文；缺失数据以未知/未分析/暂无数据展示，不得伪装为 Hook 不存在或指标为 0。
+- 诊断页以用户语言展示一句话诊断、账号基准、高/低表现、优势/问题/机会、数据不足及下一步 CTA；统计事实由确定性逻辑生成，LLM 不能覆盖。
+- 提供批量设置 content_source（REAL/AI/MIXED）、subjects、content_type 的账号级能力，并在分类后使旧诊断过期。
+- 修复旧创作者中心控件文案对 title 的污染；官方 XLSX 的作品标题不得被清洗规则改写。
 
-## 复用与验收
+## 验收
 
-复用 Phase 3.5 Chrome MV3 Helper、account-scoped session API、Phase 2 HistoricalImportManager 和确认 API。人工验收应使用真实本地 Easel UI/后端走到“等待用户登录/开始扫描”，不要求访问真实用户作品；另报告真实 Creator Center 页面和登录状态未验证的限制。
-
----
-
-# 8.7 Phase 3.5.3 - Douyin Sync Deduplication & Resume
-
-本插入阶段只修复 Creator Center 同步正确性，不实现 Phase 4。
-
-- 通过 `platform_post_id` 优先、规范化发布时间+标题兜底的两阶段去重；分别报告原始观测、唯一作品和扫描重复数。
-- DOM 只读作品标题节点，不把作品卡片中的编辑、权限和删除操作区解析为独立作品。
-- 将账号隔离的扫描会话与逐页检查点持久化到 Easel SQLite；保存页数、末页指纹与下一页提示，允许在 7 天会话期限内从已保存状态恢复。
-- 翻页须通过页码或作品列表变化确认。没有可确认的下一页控件、翻页超时、重复页时保留检查点并暂停，不得假报扫完。若来源页面显示作品总数，唯一数不足时也不得标记完成。
-- 扩展与 Easel 同步向导支持暂停、继续、结束和取消；扩展关闭/重开及 Easel 服务重启不丢失已保存扫描页。
-- 最终数据仍走 Phase 2 Preview / Confirm；取消或预览前不写入 HistoricalPost。
-- 合成页面测试覆盖重复与同名异作，SQLite/API 测试覆盖进程重启和双账号隔离；真实页面验收需用户在已登录 Creator Center 中执行。
-
-## 8.8 Phase 3.5 Snapshot Sync Strategy Adjustment
-
-本节是 Phase 3.5 的产品策略修订，取代 8.5–8.7 中关于 Creator Center 增量写入/同步确认的早期实现描述：
-
-- 每次同步扫描 Creator Center 全部历史作品，Session 按平台 ID 或稳定指纹去重；续扫继续使用原 session 的 `seen_post_ids`。
-- 只能对完整且无行级身份错误的全量 Snapshot 生成可确认预览；未到末页或平台计数不符时只保留检查点，不确认缺失状态。
-- 提前结束允许为已保存检查点生成只读部分预览；部分预览不能确认同步、不能写入作品或标记 DB-only 记录缺失。
-- Preview → Confirm 后执行幂等 reconciliation：ID 优先，发布时间+标题指纹兜底；null 保留旧非空值，真实 0 可更新；完整快照中不存在的记录标记 MISSING，不删除。
-- 历史重复修复独立提供 Preview / Confirm，按 Canonical 排序规则合并、重映射所有报告引用、归档并移除重复活动记录。
-- Douyin 日期支持 `YYYY年MM月DD日 HH:mm`，保留 `publish_time_raw` 并保存北京时间 ISO 值。任何历史作品变化会让 AccountDiagnosis 成为 STALE。
-- 本修订禁止自动确认真实账号修复；没有明确人工确认不得执行真实库合并/删除。
+覆盖重复记录、Top/Low、stale、缺失 Hook/时长、title cleanup、raw/unique/sample 计数、LOW/MEDIUM/HIGH 文案、数据缺口、LLM 降级与事实边界、账号隔离和修复后真实账号重诊断。页面由普通用户可以在 30 秒内理解现状、强弱内容、发现和下一步。完成后停止，Phase 4 等待单独确认。
 
 ---
 

@@ -30,6 +30,7 @@ class ContentSource(str, Enum):
 class HistoricalDataSource(str, Enum):
     DOUYIN_OPEN_API = "DOUYIN_OPEN_API"
     DOUYIN_CREATOR_CENTER = "DOUYIN_CREATOR_CENTER"
+    DOUYIN_OFFICIAL_EXPORT = "DOUYIN_OFFICIAL_EXPORT"
     FILE_IMPORT = "FILE_IMPORT"
     MANUAL = "MANUAL"
 
@@ -94,6 +95,7 @@ class HistoricalPost:
     publish_time_raw: str | None
     title: str
     content_type: str | None
+    content_type_raw: str | None
     content_source: ContentSource
     tags: list[str]
     note: str | None
@@ -125,6 +127,7 @@ class HistoricalPost:
             "publish_time_raw": self.publish_time_raw,
             "title": self.title,
             "content_type": self.content_type,
+            "content_type_raw": self.content_type_raw,
             "content_source": self.content_source.value,
             "tags": self.tags,
             "note": self.note,

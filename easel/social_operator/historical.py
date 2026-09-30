@@ -10,9 +10,10 @@ from uuid import uuid4
 from .models import ContentSource, HistoricalPost, Platform
 from .data_sources import ManualInputAdapter
 from .repository import AccountNotFoundError, OperatorAccountRepository
+from .canonical import canonical_unique_posts
 
 POST_FIELDS = (
-    "publish_time", "publish_time_raw", "title", "content_type", "content_source", "tags", "note", "duration",
+    "publish_time", "publish_time_raw", "title", "content_type", "content_type_raw", "content_source", "tags", "note", "duration",
     "subjects", "hook_type", "views", "likes", "comments", "favorites", "shares",
     "followers_gain", "profile_visits", "inquiries", "platform_post_id",
 )
@@ -129,7 +130,7 @@ def normalize_post(values: dict, platform: Platform, *, partial: bool = False) -
         value = source.get(field)
         try:
             if field == "title":
-                title = "" if value is None else str(value).strip()
+                title = "" if _blank(value) else str(value).strip()
                 if not title:
                     raise ValueError("标题不能为空")
                 normalized[field] = title
@@ -137,6 +138,8 @@ def normalize_post(values: dict, platform: Platform, *, partial: bool = False) -
                 raw_time = source.get("publish_time_raw")
                 normalized[field] = _parse_datetime(value if not _blank(value) else raw_time)
             elif field == "publish_time_raw":
+                normalized[field] = None if _blank(value) else str(value).strip()
+            elif field == "content_type_raw":
                 normalized[field] = None if _blank(value) else str(value).strip()
             elif field == "content_source":
                 if isinstance(value, ContentSource):
@@ -176,6 +179,7 @@ class HistoricalPostService:
             id=row["id"], account_id=row["account_id"], platform=Platform(row["platform"]),
             publish_time=row["publish_time"], publish_time_raw=row.get("publish_time_raw"),
             title=row["title"], content_type=row["content_type"],
+            content_type_raw=row.get("content_type_raw"),
             content_source=ContentSource(row["content_source"]), tags=row["tags"], note=row["note"],
             duration=row["duration"], subjects=row["subjects"], hook_type=row["hook_type"],
             views=row["views"], likes=row["likes"], comments=row["comments"], favorites=row["favorites"],
@@ -194,7 +198,16 @@ class HistoricalPostService:
 
     def list_posts(self, account_id: str, *, offset: int = 0, limit: int = 100) -> list[HistoricalPost]:
         self._account_platform(account_id)
-        return [self._to_model(row) for row in self.repository.list_posts(account_id, offset=offset, limit=limit)]
+        rows = self.canonical_posts(account_id)
+        return [self._to_model(row) for row in rows[offset:offset + limit]]
+
+    def canonical_posts(self, account_id: str) -> list[dict]:
+        self._account_platform(account_id)
+        rows = self.repository.list_posts(account_id, limit=100000)
+        return canonical_unique_posts(rows)
+
+    def canonical_count(self, account_id: str) -> int:
+        return len(self.canonical_posts(account_id))
 
     def get_post(self, account_id: str, post_id: str) -> HistoricalPost:
         self._account_platform(account_id)
@@ -234,9 +247,21 @@ class HistoricalPostService:
         if not self.repository.delete_post(account_id, post_id):
             raise LookupError(post_id)
 
+    def classify_posts(self, account_id: str, post_ids: list[str], values: dict) -> int:
+        platform = self._account_platform(account_id)
+        allowed = {"content_source", "content_type", "subjects"}
+        if not values or set(values) - allowed:
+            raise InvalidHistoricalPostError({"classification": "仅支持内容来源、内容类型和出镜主体分类"})
+        normalized = normalize_post(values, platform, partial=True)
+        filtered = {key: value for key, value in normalized.items() if key in allowed}
+        if not filtered:
+            raise InvalidHistoricalPostError({"classification": "至少设置一项分类"})
+        return self.repository.classify_posts(account_id, post_ids, filtered, self._now())
+
     def completeness(self, account_id: str) -> dict:
         platform = self._account_platform(account_id)
-        posts = self.repository.list_posts(account_id, limit=100000)
+        posts = self.canonical_posts(account_id)
+        raw_total = self.repository.count_posts(account_id)
         total = len(posts)
         reach_field = "views"
         interactions = ("likes", "comments", "favorites", "shares")
@@ -254,6 +279,7 @@ class HistoricalPostService:
             "platform": platform.value,
             "score": round(score),
             "sample_size": total,
+            "raw_record_count": raw_total,
             "coverage": coverage,
             "weights": {"has_posts": 20, "publish_time": 20, "content_type": 20, "views_or_exposure": 25,
                         "at_least_two_interaction_metrics": 15},

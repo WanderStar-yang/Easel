@@ -456,6 +456,7 @@ export interface HistoricalPost {
   publish_time_raw: string | null;
   title: string;
   content_type: string | null;
+  content_type_raw: string | null;
   content_source: 'REAL' | 'AI' | 'MIXED' | 'UNKNOWN';
   tags: string[];
   note: string | null;
@@ -472,7 +473,7 @@ export interface HistoricalPost {
   profile_visits: number | null;
   inquiries: number | null;
   platform_post_id: string | null;
-  data_source: 'DOUYIN_OPEN_API' | 'DOUYIN_CREATOR_CENTER' | 'FILE_IMPORT' | 'MANUAL';
+  data_source: 'DOUYIN_OFFICIAL_EXPORT' | 'DOUYIN_OPEN_API' | 'DOUYIN_CREATOR_CENTER' | 'FILE_IMPORT' | 'MANUAL';
   source_updated_at: string | null;
   source_presence: 'PRESENT' | 'MISSING';
   missing_since: string | null;
@@ -485,6 +486,7 @@ export interface HistoricalPostInput {
   publish_time_raw?: string | null;
   title: string;
   content_type?: string | null;
+  content_type_raw?: string | null;
   content_source?: HistoricalPost['content_source'];
   tags?: string[];
   note?: string | null;
@@ -508,6 +510,7 @@ export interface HistoricalPostsPage {
   offset: number;
   limit: number;
   total: number;
+  raw_total?: number;
 }
 
 export interface HistoricalCompleteness {
@@ -522,8 +525,9 @@ export interface HistoricalCompleteness {
 export interface HistoricalImportPreview {
   preview_id: string;
   preview_kind?: 'snapshot';
-  snapshot_complete?: boolean;
-  can_confirm?: boolean;
+  detected_platform?: string;
+  source?: string;
+  file_record_count?: number;
   platform_unique_count?: number;
   database_current_count?: number;
   insert_count?: number;
@@ -531,6 +535,11 @@ export interface HistoricalImportPreview {
   historical_duplicate_count?: number;
   platform_missing_count?: number;
   publish_time_backfill_count?: number;
+  identity_confidence?: 'high' | 'medium' | 'low';
+  warnings?: string[];
+  unsupported_columns?: string[];
+  snapshot_complete?: boolean;
+  can_confirm?: boolean;
   raw_observation_count?: number;
   errors?: Array<{ row: number; title: string; errors: Record<string, string> }>;
   message?: string;
@@ -542,17 +551,11 @@ export interface HistoricalImportPreview {
   importable_count: number;
   error_count: number;
   duplicate_count: number;
-  missing_fields: Array<{ field: string; missing_rows: number; column_missing: boolean }>;
+  missing_fields?: Array<{ field: string; missing_rows: number; column_missing: boolean }>;
   ignored_columns?: string[];
-  headers: string[];
-  rows: Array<{
-    row: number;
-    status: 'ready' | 'update' | 'invalid' | 'duplicate';
-    errors: Record<string, string>;
-    duplicate_of: string | null;
-    record: Record<string, unknown>;
-  }>;
+  rows: Array<{ row: number; status: 'ready' | 'update' | 'invalid' | 'duplicate'; errors: Record<string, string>; duplicate_of?: string | null; duplicate_count?: number; record: Record<string, unknown> }>;
   preview_truncated: boolean;
+  headers: string[];
 }
 
 export interface AccountDiagnosisReport {
@@ -564,6 +567,12 @@ export interface AccountDiagnosisReport {
   platform: 'douyin' | 'xiaohongshu';
   account: { id: string; name: string; platform: string; status: string };
   overview: string;
+  confidence_copy: string;
+  record_counts: {
+    raw_record_count: number; unique_post_count: number; diagnosis_sample_count: number;
+    excluded_stale_count: number; suspected_duplicate_count: number; archived_legacy_count: number;
+  };
+  data_gaps: Array<{ field: string; label: string; missing_count: number; impact: string }>;
   account_context: {
     profile_summary: string;
     strategy_summary: string;
@@ -615,9 +624,13 @@ export interface HistoricalRepairPreview {
   database_current_count: number;
   duplicate_groups: number;
   duplicate_count: number;
+  estimated_unique_count: number;
+  auto_merge_count: number;
+  manual_review_count: number;
   canonical_count_after_repair: number;
   reference_remap_count: number;
   groups: Array<{ canonical_id: string; duplicate_ids: string[]; title: string; merged_fields: string[] }>;
+  manual_review_groups: Array<{ group_id: string; title: string; post_ids: string[]; count: number }>;
   preview_truncated: boolean;
 }
 
@@ -647,6 +660,15 @@ export function updateHistoricalPost(
   });
 }
 
+export function batchClassifyHistoricalPosts(
+  accountId: string,
+  payload: { post_ids: string[]; content_source?: 'REAL' | 'AI' | 'MIXED'; content_type?: string; subjects?: string[] },
+): Promise<{ updated_count: number }> {
+  return request<{ updated_count: number }>(`${operatorPostsPath(accountId)}/batch-classify`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
 export function deleteHistoricalPost(accountId: string, postId: string): Promise<{ deleted: boolean; id: string }> {
   return request<{ deleted: boolean; id: string }>(`${operatorPostsPath(accountId)}/${encodeURIComponent(postId)}`, { method: 'DELETE' });
 }
@@ -667,72 +689,12 @@ export function confirmHistoricalImport(
   });
 }
 
-export interface HistoricalSyncStatus {
-  last_sync_at: string | null;
-  last_sync_source: string | null;
-  last_sync_counts: Record<string, number>;
-}
-
-export interface CreatorCenterSyncSession {
-  session_id: string;
-  expires_at: string;
-  status: 'extension_unavailable' | 'extension_available' | 'creator_tab_not_found' | 'not_logged_in'
-    | 'unsupported_page' | 'ready_to_scan' | 'scanning' | 'paused' | 'pause_requested' | 'resume_requested'
-    | 'end_requested' | 'ended' | 'cancelled' | 'scan_completed' | 'scan_failed' | 'preview_ready';
-  extension_available?: boolean;
-  message?: string;
-  preview_id?: string | null;
-  preview?: HistoricalImportPreview | null;
-  raw_observation_count?: number;
-  unique_count?: number;
-  duplicate_count?: number;
-  pages_scanned?: number;
-  expected_count?: number | null;
-  has_more?: boolean;
-  next_page_hint?: string | null;
-}
-
-export interface DouyinOpenApiStatus {
-  configured: boolean;
-  missing_configuration: string[];
-  required_permissions: string[];
-  message: string;
-}
-
-export function getHistoricalSyncStatus(accountId: string): Promise<HistoricalSyncStatus> {
-  return request<HistoricalSyncStatus>(`${operatorPostsPath(accountId)}/sync/status`);
-}
-
-export function getDouyinOpenApiStatus(accountId: string): Promise<DouyinOpenApiStatus> {
-  return request<DouyinOpenApiStatus>(`${operatorPostsPath(accountId)}/sync/openapi-status`);
-}
-
-export function createCreatorCenterSyncSession(accountId: string): Promise<CreatorCenterSyncSession> {
-  return request<CreatorCenterSyncSession>(`${operatorPostsPath(accountId)}/sync/sessions`, { method: 'POST' });
-}
-
-export function getCreatorCenterSyncSession(accountId: string, sessionId: string): Promise<CreatorCenterSyncSession> {
-  return request<CreatorCenterSyncSession>(`${operatorPostsPath(accountId)}/sync/sessions/${encodeURIComponent(sessionId)}`);
-}
-
-export function listCreatorCenterSyncSessions(accountId: string): Promise<{ items: CreatorCenterSyncSession[] }> {
-  return request<{ items: CreatorCenterSyncSession[] }>(`${operatorPostsPath(accountId)}/sync/sessions`);
-}
-
-export function controlCreatorCenterSyncSession(
-  accountId: string, sessionId: string, action: 'pause' | 'resume' | 'end' | 'cancel',
-): Promise<CreatorCenterSyncSession> {
-  return request<CreatorCenterSyncSession>(`${operatorPostsPath(accountId)}/sync/sessions/${encodeURIComponent(sessionId)}/control`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
-  });
-}
-
-export function confirmCreatorCenterSnapshot(accountId: string, previewId: string): Promise<{
+export function confirmOfficialExportSnapshot(accountId: string, previewId: string): Promise<{
   inserted_count: number; updated_count: number; archived_duplicate_count: number;
   platform_missing_count: number; publish_time_backfill_count: number; canonical_count: number;
   reference_remap_count: number; diagnosis_stale: boolean; last_sync_at: string;
 }> {
-  return request(`${operatorPostsPath(accountId)}/sync/snapshots/confirm`, {
+  return request(`${operatorPostsPath(accountId)}/imports/snapshot-confirm`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preview_id: previewId }),
   });
 }
@@ -741,11 +703,11 @@ export function previewHistoricalRepair(accountId: string): Promise<HistoricalRe
   return request(`${operatorPostsPath(accountId)}/repair/preview`, { method: 'POST' });
 }
 
-export function confirmHistoricalRepair(accountId: string, previewId: string): Promise<{
-  archived_duplicate_count: number; canonical_count: number; reference_remap_count: number; diagnosis_stale: boolean;
+export function confirmHistoricalRepair(accountId: string, previewId: string, manualGroupIds: string[] = []): Promise<{
+  archived_duplicate_count: number; canonical_count: number; reference_remap_count: number; diagnosis_stale: boolean; manual_review_confirmed: number;
 }> {
   return request(`${operatorPostsPath(accountId)}/repair/confirm`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preview_id: previewId }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preview_id: previewId, manual_group_ids: manualGroupIds }),
   });
 }
 

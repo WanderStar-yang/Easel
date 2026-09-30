@@ -10,6 +10,7 @@ from pathlib import Path
 from statistics import mean
 
 from .models import Platform
+from .canonical import clean_title
 
 _SHARED_SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "shared" / "scripts"
 if str(_SHARED_SCRIPTS) not in sys.path:
@@ -29,9 +30,10 @@ XHS_METRICS = METRICS
 CONFIDENCE_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 
 
-def confidence_level(sample_size: int, completeness: float, metric_coverage: float) -> str:
+def confidence_level(sample_size: int, completeness: float, metric_coverage: float,
+                    content_classification_coverage: float = 1.0) -> str:
     """Conservative report confidence; thresholds are versioned with the algorithm."""
-    if sample_size >= 20 and completeness >= 80 and metric_coverage >= 0.7:
+    if sample_size >= 20 and completeness >= 80 and metric_coverage >= 0.7 and content_classification_coverage >= 0.7:
         return "HIGH"
     if sample_size >= 8 and completeness >= 50 and metric_coverage >= 0.4:
         return "MEDIUM"
@@ -117,7 +119,7 @@ def _subject_groups(row: dict) -> list[str]:
 
 
 def _duration_group(value: float | None) -> str | None:
-    if value is None:
+    if value is None or value <= 0:
         return None
     if value <= 15:
         return "≤15秒"
@@ -154,12 +156,18 @@ def _segment_values(rows: list[dict], platform: Platform) -> dict[str, dict[str,
         dimensions.update({"subjects": defaultdict(list), "duration": defaultdict(list), "publish_period": defaultdict(list)})
     for row in rows:
         source = row.get("content_source") or "UNKNOWN"
-        dimensions["content_source"][source].append(row)
-        content_type = (row.get("content_type") or "未分类").strip()
-        dimensions["content_type"][content_type].append(row)
-        dimensions["hook"][(row.get("hook_type") or "").strip() or "未标注 / 无数据"].append(row)
+        if source != "UNKNOWN":
+            dimensions["content_source"][source].append(row)
+        content_type = (row.get("content_type") or "").strip()
+        if content_type:
+            dimensions["content_type"][content_type].append(row)
+        hook = (row.get("hook_type") or "").strip()
+        if hook:
+            dimensions["hook"][hook].append(row)
         if platform == Platform.DOUYIN:
             for subject in _subject_groups(row):
+                if subject == "未标注主体":
+                    continue
                 dimensions["subjects"][subject].append(row)
             duration = _duration_group(row.get("duration"))
             if duration:
@@ -172,8 +180,8 @@ def _segment_values(rows: list[dict], platform: Platform) -> dict[str, dict[str,
 
 def _distribution(rows: list[dict], platform: Platform) -> dict:
     result: dict[str, object] = {
-        "content_source": dict(Counter(row.get("content_source") or "UNKNOWN" for row in rows)),
-        "content_type": dict(Counter((row.get("content_type") or "未分类").strip() for row in rows)),
+        "content_source": dict(Counter(row.get("content_source") for row in rows if row.get("content_source") not in (None, "UNKNOWN"))),
+        "content_type": dict(Counter((row.get("content_type") or "").strip() for row in rows if (row.get("content_type") or "").strip())),
     }
     if platform == Platform.DOUYIN:
         subject_counts: Counter = Counter()
@@ -181,8 +189,8 @@ def _distribution(rows: list[dict], platform: Platform) -> dict:
             subject_counts.update(_subject_groups(row))
         result.update({
             "subjects": dict(subject_counts),
-            "hook": dict(Counter((row.get("hook_type") or "").strip() or "未标注 / 无数据" for row in rows)),
-            "duration": dict(Counter(_duration_group(row.get("duration")) or "暂无数据" for row in rows)),
+            "hook": dict(Counter((row.get("hook_type") or "").strip() for row in rows if (row.get("hook_type") or "").strip())),
+            "duration": dict(Counter(_duration_group(row.get("duration")) for row in rows if _duration_group(row.get("duration")))),
             "publish_period": dict(Counter(_publish_period(row.get("publish_time")) for row in rows if _publish_period(row.get("publish_time")))),
         })
     return result
@@ -251,7 +259,7 @@ def _ranked_posts(rows: list[dict], order: str, platform: Platform) -> list[dict
     if order == "descending":
         available.reverse()
     return [{
-        "id": row["id"], "title": row["title"], "publish_time": row.get("publish_time"),
+        "id": row["id"], "title": clean_title(row.get("title")), "publish_time": row.get("publish_time"),
         "content_type": row.get("content_type"), "content_source": row.get("content_source"),
         "subjects": row.get("subjects", []), "views": row.get("views"), "likes": row.get("likes"),
         "comments": row.get("comments"), "favorites": row.get("favorites"),
@@ -277,16 +285,30 @@ def _rule_findings(rows: list[dict], platform: Platform, completeness: dict, met
     if top and confidence != "LOW":
         metric = _ranking_metric(rows, platform)
         label = "收藏" if metric == "favorites" else "播放/曝光"
-        strengths.append(f"按{label}排序的最高作品为《{top[0]['title']}》（{top[0][metric]}），排序依据为 {metric}。")
+        median = metrics.get("views", {}).get("median")
+        if metric == "views" and isinstance(median, (int, float)) and median > 0 and top[0][metric] >= median * 2:
+            strengths.append(f"《{top[0]['title']}》获得 {top[0][metric]} 次播放，超过账号典型水平（中位数 {median:g}），说明有作品能明显获得更高触达。")
+        else:
+            strengths.append(f"当前表现较好的作品是《{top[0]['title']}》，{label}为 {top[0][metric]}。")
+    classified = sum(bool(row.get("content_type")) for row in rows)
+    if rows and classified < len(rows):
+        problems.append(f"{len(rows) - classified} 条作品还没有内容分类，当前无法验证哪类内容更有效。")
     if pattern_findings:
         supported = [item for item in pattern_findings if item["confidence"] != "LOW"]
+        dimension_labels = {"content_source": "真实拍摄与 AI 视频", "content_type": "内容类型",
+                            "subjects": "出镜主体", "hook": "开场方式", "duration": "视频时长",
+                            "publish_period": "发布时间段"}
+        metric_labels = {"views_median": "播放中位数", "likes_median": "点赞中位数",
+                         "comments_median": "评论中位数", "favorites_median": "收藏中位数",
+                         "shares_median": "分享中位数", "followers_gain_median": "涨粉中位数",
+                         "profile_visits_median": "主页访问中位数", "inquiries_median": "咨询中位数"}
         for item in supported[:3]:
-            strengths.append(
-                f"{item['pattern']} 在 {item['metric']} 上呈现可观察差异；样本分别为 "
-                f"{item['sample_a']} 与 {item['sample_b']}，置信度 {item['confidence']}。"
-            )
+            high_group, low_group = item["pattern"].split(" vs ", 1)
+            dimension = dimension_labels.get(item["dimension"], "内容分组")
+            metric = metric_labels.get(item["metric"], "表现")
+            strengths.append(f"在{dimension}分组中，{high_group}组的{metric}为 {item['value_a']:g}，高于{low_group}组的 {item['value_b']:g}；两组分别有 {item['sample_a']} 和 {item['sample_b']} 条作品。")
             opportunities.append(
-                f"可在后续内容中复测 {item['pattern']} 的差异；本诊断只记录历史表现，不据此确认运营策略。"
+                f"可以继续验证{dimension}对表现的影响；当前观察只说明历史作品存在差异，不能据此认定原因。"
             )
     if not opportunities and pattern_findings:
         opportunities.append("当前分组差异样本有限；后续积累更多作品后可再次检验已有分组。")
@@ -295,20 +317,23 @@ def _rule_findings(rows: list[dict], platform: Platform, completeness: dict, met
     if not strengths:
         strengths.append("当前数据尚未支持稳定的相对优势判断；保留原始统计供后续样本积累。")
     if not opportunities:
-        opportunities.append("继续补齐发布时间、内容类型与平台指标，再检验分组表现差异。")
+        opportunities.append("补充内容类型和出镜主体分类后，可继续比较不同内容方向的表现。")
     return {"strengths": strengths, "problems": problems, "opportunities": opportunities}
 
 
 class AccountIntelligenceEngine:
     """Build deterministic evidence for initial diagnosis and later account reviews."""
 
-    def analyze(self, *, account: dict, posts: list[dict], completeness: dict) -> dict:
+    def analyze(self, *, account: dict, posts: list[dict], completeness: dict,
+                raw_record_count: int | None = None, excluded_stale_count: int = 0,
+                suspected_duplicates: int = 0, archived_legacy_count: int = 0) -> dict:
         platform = Platform(account["platform"])
         sample_size = len(posts)
         metrics = _metric_summary(posts, platform)
         metric_fields = DOUYIN_METRICS if platform == Platform.DOUYIN else XHS_METRICS
         metric_coverage = mean([metrics["metric_coverage"][field]["coverage"] for field in metric_fields]) if metric_fields else 0
-        confidence = confidence_level(sample_size, completeness["score"], metric_coverage or 0)
+        classification_coverage = completeness.get("coverage", {}).get("content_type", 0)
+        confidence = confidence_level(sample_size, completeness["score"], metric_coverage or 0, classification_coverage)
         pattern_findings, insufficient = _pattern_findings(posts, platform, confidence)
         if sample_size < 5:
             insufficient.append(f"整体历史样本仅 {sample_size} 条；分组和整体判断都应视为低置信度。")
@@ -317,6 +342,14 @@ class AccountIntelligenceEngine:
         if completeness["score"] < 50:
             insufficient.append(f"历史数据完整度仅 {completeness['score']}%，结论可信度有限。")
         insufficient = list(dict.fromkeys(insufficient))
+        record_counts = {
+            "raw_record_count": raw_record_count if raw_record_count is not None else sample_size,
+            "unique_post_count": sample_size,
+            "diagnosis_sample_count": sample_size,
+            "excluded_stale_count": excluded_stale_count,
+            "suspected_duplicate_count": suspected_duplicates,
+            "archived_legacy_count": archived_legacy_count,
+        }
         data_quality = {
             "sample_size": sample_size,
             "completeness": completeness,
@@ -324,7 +357,7 @@ class AccountIntelligenceEngine:
             "overall_metric_coverage": round(metric_coverage or 0, 4),
             "confidence": confidence,
             "confidence_rules": {
-                "HIGH": "sample_size >= 20, completeness >= 80, overall metric coverage >= 70%",
+                "HIGH": "sample_size >= 20, completeness >= 80, overall metric coverage >= 70%, content classification coverage >= 70%",
                 "MEDIUM": "sample_size >= 8, completeness >= 50, overall metric coverage >= 40%",
                 "otherwise": "LOW",
             },
@@ -351,8 +384,9 @@ class AccountIntelligenceEngine:
                 "sample_size": sample_size,
                 "algorithm_version": ALGORITHM_VERSION,
             },
-            "overview": f"读取 {sample_size} 条历史作品；当前为 {confidence} 置信度的描述性诊断，不自动生成 Baseline 或运营策略。",
+            "overview": self._user_summary(rows=posts, metrics=metrics, confidence=confidence),
             "data_quality": data_quality,
+            "record_counts": record_counts,
             "content_distribution": _distribution(posts, platform),
             "metric_summary": metrics,
             "top_posts": _ranked_posts(posts, "descending", platform),
@@ -368,6 +402,8 @@ class AccountIntelligenceEngine:
         }
         narrative = _rule_findings(posts, platform, completeness, metrics, confidence, pattern_findings, insufficient)
         report.update(narrative)
+        report["confidence_copy"] = self._confidence_copy(confidence, completeness)
+        report["data_gaps"] = self._data_gaps(posts, platform)
         if platform == Platform.XIAOHONGSHU:
             favorites = metrics["favorites"]["median"]
             views = metrics["views"]["median"]
@@ -394,3 +430,59 @@ class AccountIntelligenceEngine:
                 "interpretation": "仅作为后续分析输入，本阶段不调整 Strategy。",
             }
         return report
+
+    @staticmethod
+    def _user_summary(*, rows: list[dict], metrics: dict, confidence: str) -> str:
+        median_views = metrics["views"]["median"]
+        if not rows:
+            return "当前还没有可用于诊断的有效作品。"
+        if median_views is None:
+            return f"当前有 {len(rows)} 条有效作品，但播放或曝光数据不足，暂时无法判断典型表现。"
+        above = sum(row.get("views") is not None and row["views"] > median_views for row in rows)
+        classified = sum(bool(row.get("content_type")) for row in rows)
+        text = f"当前 {len(rows)} 条有效作品的播放/曝光中位数为 {median_views:g}，有 {above} 条高于这一水平。"
+        if classified == 0:
+            text += "历史作品尚未完成内容分类，暂时不能可靠比较不同内容方向。"
+        elif classified < len(rows):
+            text += f"目前有 {classified} 条完成内容分类，暂时不能可靠比较不同内容方向。"
+        elif confidence == "LOW":
+            text += "现有样本或指标覆盖有限，结论适合作为初步参考。"
+        return text
+
+    @staticmethod
+    def _confidence_copy(confidence: str, completeness: dict) -> str:
+        if confidence == "HIGH":
+            return "数据较完整，可以支持较可靠的内容比较。"
+        if confidence == "MEDIUM":
+            coverage = completeness.get("coverage", {})
+            if coverage.get("publish_time", 0) < 0.8 or coverage.get("content_type", 0) < 0.8:
+                return "当前有效作品数量足够，但内容分类或发布时间仍不完整，部分结论只能作为参考。"
+            return "当前有效作品数量足够，部分指标仍有缺失，结论可作为参考。"
+        return "历史数据较少或字段缺失较多，当前建议仅供初步参考。"
+
+    @staticmethod
+    def _data_gaps(rows: list[dict], platform: Platform) -> list[dict[str, str | int]]:
+        total = len(rows)
+        if not total:
+            return []
+        gaps: list[dict[str, str | int]] = []
+        for field, label, impact in (
+            ("publish_time", "发布时间", "无法判断不同发布时间段的表现。"),
+            ("content_type", "内容类型", "无法比较不同内容方向。"),
+            ("views", "播放/曝光", "无法可靠比较作品触达表现。"),
+        ):
+            missing = sum(row.get(field) in (None, "") for row in rows)
+            if missing:
+                gaps.append({"field": field, "label": label, "missing_count": missing, "impact": impact})
+        if platform == Platform.DOUYIN:
+            for field, label, impact in (
+                ("duration", "视频时长", "暂时无法比较不同时长作品的表现。"),
+                ("subjects", "出镜主体", "暂时无法比较单猫与双猫内容。"),
+                ("content_source", "真实拍摄 / AI 视频", "暂时无法比较实拍与 AI 视频。"),
+                ("hook_type", "开场方式", "Hook 信息未分析，暂时无法判断不同开场方式的表现。"),
+            ):
+                missing = sum(not row.get(field) if field == "subjects" else row.get(field) in (None, "", "UNKNOWN", 0)
+                              for row in rows)
+                if missing:
+                    gaps.append({"field": field, "label": label, "missing_count": missing, "impact": impact})
+        return gaps

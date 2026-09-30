@@ -1,17 +1,21 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta, timezone
+import io
+from datetime import datetime, timezone
 
+import pandas as pd
 import pytest
+from fastapi.testclient import TestClient
 
 from easel.social_operator.diagnosis import AccountDiagnosisService, UnavailableExplainer
 from easel.social_operator.historical import HistoricalPostService, normalize_post
-from easel.social_operator.historical_sync import HistoricalSyncSessionManager
+from easel.social_operator.historical_imports import HistoricalImportManager
 from easel.social_operator.models import Platform
 from easel.social_operator.repository import OperatorAccountRepository
 from easel.social_operator.service import OperatorAccountService
-from easel.social_operator.snapshot_sync import SnapshotReconciliationManager
+from easel.social_operator.snapshot_reconciliation import SnapshotReconciliationManager
+from web.app import app
+from web.routers.historical_posts import HistoricalServices, get_historical_services
 
 
 @pytest.fixture
@@ -19,191 +23,200 @@ def context(tmp_path):
     repository = OperatorAccountRepository(tmp_path / "operator.sqlite3")
     accounts = OperatorAccountService(repository)
     posts = HistoricalPostService(repository)
-    snapshots = SnapshotReconciliationManager(repository)
-    sessions = HistoricalSyncSessionManager(repository)
-    return repository, accounts, posts, snapshots, sessions
+    services = HistoricalServices(accounts, posts, HistoricalImportManager(posts, repository),
+                                  SnapshotReconciliationManager(repository))
+    app.dependency_overrides[get_historical_services] = lambda: services
+    yield repository, accounts, posts, services.snapshots, services
+    app.dependency_overrides.pop(get_historical_services, None)
 
 
-def record(post_id: str, title: str, *, date: str = "2025年11月11日 09:46", **values):
-    return {"platform_post_id": post_id, "title": title, "publish_time_raw": date,
-            "views": 100, "likes": 5, "comments": 1, "favorites": 2, "shares": 0, **values}
+def export_xlsx(rows: list[dict]) -> bytes:
+    output = io.BytesIO()
+    pd.DataFrame(rows).to_excel(output, index=False, engine="openpyxl")
+    return output.getvalue()
 
 
-def apply_snapshot(context, rows, *, raw=None, expected=None):
-    repository, _, _, snapshots, _ = context
-    summary = snapshots.preview_snapshot(
-        "douyin-pet", rows, raw_count=len(rows) if raw is None else raw,
-        scan_duplicate_count=0, pages_scanned=1, expected_count=expected if expected is not None else len(rows),
-        scan_complete=True,
-    )
-    assert summary["can_confirm"] is True
-    result = snapshots.confirm("douyin-pet", summary["preview_id"])
-    return summary, result
+def upload(rows: list[dict], account="douyin-pet"):
+    return TestClient(app, base_url="http://localhost:7860", headers={"Origin": "http://localhost:7860"}).post(f"/api/operator/accounts/{account}/posts/imports/preview",
+        files={"file": ("作品列表导出.xlsx", export_xlsx(rows),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
 
 
-def test_snapshot_repeated_sync_is_idempotent_updates_zero_and_keeps_null(context):
+def confirm_snapshot(account, preview_id):
+    return TestClient(app, base_url="http://localhost:7860", headers={"Origin": "http://localhost:7860"}).post(f"/api/operator/accounts/{account}/posts/imports/snapshot-confirm",
+                                json={"preview_id": preview_id})
+
+
+def official_row(title="双猫日常", post_id="dy-1", **values):
+    return {"作品名称": title, "发布时间": "2025-11-11 09:46:00", "作品 ID": post_id,
+            "体裁": "横屏视频", "播放量": 1200, "点赞量": 80, "评论量": 12,
+            "收藏量": 20, "分享量": 3, "粉丝增量": 4, "审核状态": "已通过", **values}
+
+
+def test_real_format_headers_mapping_unknown_columns_and_values(context):
+    response = upload([official_row()])
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["detected_platform"] == "抖音创作者中心"
+    assert preview["source"] == "DOUYIN_OFFICIAL_EXPORT"
+    assert preview["file_record_count"] == 1 and preview["error_count"] == 0
+    row = preview["rows"][0]["record"]
+    assert row["title"] == "双猫日常" and row["platform_post_id"] == "dy-1"
+    assert row["content_type_raw"] == "横屏视频"
+    assert row["publish_time"].startswith("2025-11-11T09:46:00")
+    assert tuple(row[key] for key in ("views", "likes", "comments", "favorites", "shares", "followers_gain")) == (1200, 80, 12, 20, 3, 4)
+    assert "审核状态" in preview["unsupported_columns"] and preview["can_confirm"] is True
+
+
+def test_snapshot_reupload_updates_metrics_zero_keeps_null_and_stales_diagnosis(context):
+    repository, _, posts, _, _ = context
+    first = upload([official_row()]).json()
+    assert confirm_snapshot("douyin-pet", first["preview_id"]).status_code == 200
+    saved = posts.list_posts("douyin-pet", limit=20)[0]
+    AccountDiagnosisService(repository, explainer=UnavailableExplainer()).diagnose("douyin-pet")
+    unchanged = upload([official_row()]).json()
+    unchanged_result = confirm_snapshot("douyin-pet", unchanged["preview_id"]).json()
+    assert unchanged_result["diagnosis_stale"] is True
+    AccountDiagnosisService(repository, explainer=UnavailableExplainer()).diagnose("douyin-pet")
+    second = upload([official_row(**{"播放量": 0, "点赞量": None, "评论量": None})]).json()
+    assert second["insert_count"] == 0 and second["update_count"] == 1
+    result = confirm_snapshot("douyin-pet", second["preview_id"]).json()
+    updated = posts.get_post("douyin-pet", saved.id)
+    assert result["diagnosis_stale"] is True
+    assert updated.views == 0 and updated.likes == 80 and updated.comments == 12
+    assert updated.data_source == "DOUYIN_OFFICIAL_EXPORT"
+    assert posts.repository.get_latest_diagnosis("douyin-pet")["status"] == "STALE"
+
+
+def test_duplicate_upload_is_idempotent_and_account_scoped(context):
     _, _, posts, _, _ = context
-    rows = [record(f"id-{i}", f"作品{i}") for i in range(83)]
-    first, first_result = apply_snapshot(context, rows)
-    assert first["platform_unique_count"] == 83
-    assert first_result["canonical_count"] == 83
-    stable_ids = {post.platform_post_id: post.id for post in posts.list_posts("douyin-pet", limit=500)}
-
-    second_rows = [dict(row) for row in rows]
-    second_rows[0].update(views=0, likes=None)
-    second, second_result = apply_snapshot(context, second_rows)
-    assert second["insert_count"] == 0 and second["update_count"] == 83
-    assert second_result["canonical_count"] == 83
-    updated = posts.get_post("douyin-pet", stable_ids["id-0"])
-    assert updated.views == 0 and updated.likes == 5
-    assert {post.platform_post_id: post.id for post in posts.list_posts("douyin-pet", limit=500)} == stable_ids
+    repeated = upload([official_row(), official_row()]).json()
+    assert repeated["file_record_count"] == 2 and repeated["platform_unique_count"] == 1
+    assert repeated["duplicate_count"] == 1 and repeated["insert_count"] == 1
+    assert confirm_snapshot("douyin-pet", repeated["preview_id"]).status_code == 200
+    second = upload([official_row()]).json()
+    assert second["insert_count"] == 0 and second["update_count"] == 1
+    confirm_snapshot("douyin-pet", second["preview_id"])
+    assert posts.repository.count_posts("douyin-pet") == 1
+    assert posts.repository.count_posts("xhs-developer") == 0
     assert posts.list_posts("xhs-developer") == []
 
-    AccountDiagnosisService(context[0], explainer=UnavailableExplainer()).diagnose("douyin-pet")
-    unchanged, unchanged_result = apply_snapshot(context, second_rows)
-    assert unchanged["insert_count"] == 0 and unchanged["update_count"] == 83
-    assert unchanged_result["diagnosis_stale"] is False
-    assert context[0].get_latest_diagnosis("douyin-pet")["status"] == "CURRENT"
+
+def test_missing_publish_time_is_warning_not_error_and_no_now_substitution(context):
+    row = official_row()
+    row.pop("发布时间")
+    row.pop("作品 ID")
+    preview = upload([row]).json()
+    assert preview["error_count"] == 0 and preview["can_confirm"] is True
+    assert any("导出文件未提供" in warning for warning in preview["warnings"])
+    assert preview["rows"][0]["record"]["publish_time"] is None
+    assert preview["identity_confidence"] == "low"
 
 
-def test_snapshot_inserts_new_posts_and_marks_missing_without_deleting(context):
-    _, _, posts, _, _ = context
-    original = [record(f"id-{i}", f"作品{i}") for i in range(5)]
-    apply_snapshot(context, original)
-    new = [*original[:4], *(record(f"new-{i}", f"新作品{i}") for i in range(3))]
-    summary, result = apply_snapshot(context, new)
-    assert summary["insert_count"] == 3
-    assert summary["platform_missing_count"] == 1
-    assert result["canonical_count"] == 8
-    missing = next(post for post in posts.list_posts("douyin-pet", limit=100) if post.platform_post_id == "id-4")
-    assert missing.source_presence == "MISSING" and missing.missing_since
-    assert posts.get_post("douyin-pet", missing.id).id == missing.id
+def test_bad_title_and_number_are_row_errors_unknown_column_does_not_fail_file(context):
+    response = upload([official_row(title="", **{"点赞量": "not-a-number"})])
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["error_count"] == 1 and preview["can_confirm"] is False
+    assert "审核状态" in preview["unsupported_columns"]
+    assert {"title", "likes"}.issubset(preview["errors"][0]["errors"])
 
 
-def test_raw_120_to_unique_83_is_previewed_before_any_write(context):
-    _, _, posts, snapshots, _ = context
-    unique = [record(f"id-{i}", f"作品{i}") for i in range(83)]
-    raw_rows = [*unique, *unique[:37]]
-    preview = snapshots.preview_snapshot("douyin-pet", raw_rows, raw_count=120, scan_duplicate_count=37,
-                                         pages_scanned=3, expected_count=83, scan_complete=True)
-    assert preview["raw_observation_count"] == 120
-    assert preview["platform_unique_count"] == 83
-    assert preview["scan_duplicate_count"] == 37
-    assert posts.repository.count_posts("douyin-pet") == 0
+def test_official_export_parser_rejects_other_account(context):
+    response = upload([official_row()], account="xhs-developer")
+    assert response.status_code == 422
 
 
-def test_repair_202_legacy_rows_to_83_archives_and_remaps_references(context):
+def test_repair_preview_separates_automatic_and_manual_duplicates(context):
     repository, _, posts, snapshots, _ = context
-    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
-    legacy_rows = []
-    for index in range(83):
-        base_title = f"猫咪作品 {index}"
-        legacy_rows.append({"title": base_title, "views": 10 + index, "likes": 2,
-                            "data_source": "DOUYIN_CREATOR_CENTER",
-                            "source_updated_at": (now + timedelta(seconds=1)).isoformat()})
-    for duplicate_index in range(119):
-        index = duplicate_index % 83
-        base_title = f"猫咪作品 {index}"
-        decorated_title = base_title + " 编辑作品 设置权限 作品置顶 删除作品"
-        legacy_rows.append({"title": decorated_title, "views": 1000 + duplicate_index, "likes": 0,
-                            "data_source": "DOUYIN_CREATOR_CENTER",
-                            "source_updated_at": (now + timedelta(seconds=duplicate_index + 2)).isoformat()})
-    inserted, duplicates = repository.create_posts(
-        [(f"post-{index}", {**normalize_post(row, Platform.DOUYIN), "account_id": "douyin-pet",
-                            "data_source": row["data_source"], "source_updated_at": row["source_updated_at"]})
-         for index, row in enumerate(legacy_rows)], now.isoformat(),
-    )
-    assert len(inserted) == 202 and not duplicates
-    old_ids = [row["id"] for row in repository.list_posts("douyin-pet", limit=500)]
-    report = {"input_evidence": {"historical_post_ids": old_ids,
-                                  "historical_post_versions": [{"id": post_id, "updated_at": now.isoformat()} for post_id in old_ids]},
-              "top_posts": [{"id": old_ids[0]}]}
-    repository.save_diagnosis("diagnosis-1", "douyin-pet", "test", json.dumps(report), now.isoformat())
-
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [("one", "FILE_IMPORT", "stable", "2025-11-01", None), ("two", "FILE_IMPORT", "stable", "2025-11-01", None),
+            ("legacy1", "DOUYIN_CREATOR_CENTER", "legacy title", None, None),
+            ("legacy2", "DOUYIN_CREATOR_CENTER", "legacy title 编辑作品 设置权限 作品置顶 删除作品", None, None)]
+    for post_id, source, title, publish_time, platform_id in rows:
+        values = normalize_post({"title": title, "publish_time": publish_time, "platform_post_id": platform_id}, Platform.DOUYIN)
+        values.update(account_id="douyin-pet", data_source=source, source_updated_at=now)
+        with repository._connect() as conn:
+            repository._write_post(conn, "douyin-pet", post_id, values, now, insert=True)
     preview = snapshots.preview_repair("douyin-pet")
-    assert preview["database_current_count"] == 202
-    assert preview["canonical_count_after_repair"] == 83
-    assert preview["duplicate_count"] == 119
-    assert posts.repository.count_posts("douyin-pet") == 202
+    assert preview["database_current_count"] == 4
+    assert preview["estimated_unique_count"] == 2
+    assert preview["auto_merge_count"] == 1 and preview["manual_review_count"] == 1
+    result = snapshots.confirm_repair("douyin-pet", preview["preview_id"],
+                                      [preview["manual_review_groups"][0]["group_id"]])
+    assert result["archived_duplicate_count"] == 2 and result["manual_review_confirmed"] == 1
+    assert posts.repository.count_posts("douyin-pet") == 2
+
+
+def test_duplicate_repair_marks_existing_diagnosis_stale(context):
+    repository, _, _, snapshots, _ = context
+    now = datetime.now(timezone.utc).isoformat()
+    for post_id in ("repair-a", "repair-b"):
+        values = normalize_post({"title": "重复作品", "publish_time": "2025-11-01"}, Platform.DOUYIN)
+        values.update(account_id="douyin-pet", data_source="DOUYIN_CREATOR_CENTER", source_updated_at=now)
+        with repository._connect() as conn:
+            repository._write_post(conn, "douyin-pet", post_id, values, now, insert=True)
+    AccountDiagnosisService(repository, explainer=UnavailableExplainer()).diagnose("douyin-pet")
+    preview = snapshots.preview_repair("douyin-pet")
     result = snapshots.confirm_repair("douyin-pet", preview["preview_id"])
-    assert result["archived_duplicate_count"] == 119 and result["canonical_count"] == 83
-    assert result["reference_remap_count"] == 119 and result["diagnosis_stale"] is True
-    assert repository._connect().execute("SELECT COUNT(*) FROM historical_post_archive").fetchone()[0] == 119
-    latest = repository.get_latest_diagnosis("douyin-pet")
-    assert latest["status"] == "STALE"
-    remapped = latest["report"]["input_evidence"]["historical_post_ids"]
-    assert len(remapped) == 83 and len(set(remapped)) == 83
-    assert all("编辑作品" not in post.title for post in posts.list_posts("douyin-pet", limit=100))
+    assert result["diagnosis_stale"] is True
+    assert repository.get_latest_diagnosis("douyin-pet")["status"] == "STALE"
 
 
-def test_snapshot_backfills_chinese_publish_time_and_null_does_not_erase_metrics(context):
-    repository, _, posts, snapshots, _ = context
-    now = datetime(2026, 9, 29, tzinfo=timezone.utc).isoformat()
-    legacy = normalize_post({"title": "回填作品 编辑作品 设置权限 作品置顶 删除作品", "views": 99, "likes": 4}, Platform.DOUYIN)
-    legacy.update(account_id="douyin-pet", data_source="DOUYIN_CREATOR_CENTER", source_updated_at=now)
-    repository.create_posts([("legacy-post", legacy)], now)
-    incoming = record("platform-9", "回填作品", views=None, likes=None)
-    preview, result = apply_snapshot(context, [incoming])
-    assert preview["publish_time_backfill_count"] == 1
-    post = posts.get_post("douyin-pet", "legacy-post")
-    assert post.id == "legacy-post"
-    assert post.publish_time == "2025-11-11T09:46:00+08:00"
-    assert post.publish_time_raw == "2025年11月11日 09:46"
-    assert post.views == 99 and post.likes == 4
-    assert post.platform_post_id == "platform-9"
-    assert result["canonical_count"] == 1
-    assert normalize_post({"title": "time", "publish_time_raw": "2025年11月11日 09:46"}, Platform.DOUYIN)["publish_time"] == "2025-11-11T09:46:00+08:00"
+def test_retired_browser_sync_runtime_is_unreferenced():
+    from pathlib import Path
+    assert not Path("easel/social_operator/historical_sync.py").exists()
+    assert not Path("browser-helpers/douyin-sync").exists()
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert not any("/posts/sync/" in route for route in paths)
+    assert "/api/accounts" in paths
+    assert "/api/publish/{platform}" in paths
 
 
-def test_snapshot_preview_requires_complete_count_and_rejects_stale_confirm(context):
-    repository, _, posts, snapshots, _ = context
-    rows = [record("one", "一号")]
-    incomplete = snapshots.preview_snapshot("douyin-pet", rows, raw_count=1, scan_duplicate_count=0,
-                                             pages_scanned=1, expected_count=2, scan_complete=True)
-    assert incomplete["can_confirm"] is False
-    with pytest.raises(ValueError, match="必须完成"):
-        snapshots.confirm("douyin-pet", incomplete["preview_id"])
-    complete = snapshots.preview_snapshot("douyin-pet", rows, raw_count=1, scan_duplicate_count=0,
-                                           pages_scanned=1, expected_count=1, scan_complete=True)
-    posts.create_post("douyin-pet", {"title": "并发改动"})
-    with pytest.raises(ValueError, match="预览后发生"):
-        snapshots.confirm("douyin-pet", complete["preview_id"])
+def test_invalid_publish_time_is_row_error(context):
+    preview = upload([official_row(**{"发布时间": "not-a-date"})]).json()
+    assert preview["error_count"] == 1 and preview["can_confirm"] is False
+    assert "publish_time" in preview["errors"][0]["errors"]
 
 
-def test_snapshot_updates_mark_previous_diagnosis_stale(context):
-    repository, _, posts, _, _ = context
-    posts.create_post("douyin-pet", {"title": "旧数据", "publish_time": "2025-01-01", "views": 3})
-    diagnosis = AccountDiagnosisService(repository, explainer=UnavailableExplainer()).diagnose("douyin-pet")
-    assert diagnosis.as_dict()["status"] == "COMPLETED"
-    posts.update_post("douyin-pet", diagnosis.report["input_evidence"]["historical_post_ids"][0], {"views": 4})
-    stale = AccountDiagnosisService(repository, explainer=UnavailableExplainer()).get_latest("douyin-pet")
-    assert stale.as_dict()["status"] == "STALE"
+def test_empty_csv_can_be_previewed_without_writing(context):
+    client = TestClient(app, base_url="http://localhost:7860", headers={"Origin": "http://localhost:7860"})
+    response = client.post("/api/operator/accounts/douyin-pet/posts/imports/preview",
+                           files={"file": ("empty.csv", b"", "text/csv")})
+    assert response.status_code == 200, response.text
+    assert response.json()["total_rows"] == 0
 
 
-def test_pause_resume_same_session_deduplicates_revisited_first_page(context):
-    _, _, _, _, sessions = context
-    url = "https://creator.douyin.com/creator-micro/content/manage"
-    session = sessions.create("douyin-pet")
-    session_id = session["session_id"]
-    first = {"platform_post_id": "seen-1", "title": "一号", "publish_time_raw": "2025年11月11日 09:46"}
-    saved = sessions.checkpoint("douyin-pet", session_id, [first], url, page_fingerprint="p1", has_next=True)
-    assert saved["unique_count"] == 1
-    sessions.control("douyin-pet", session_id, "pause")
-    paused = sessions.checkpoint("douyin-pet", session_id, [first], url, page_fingerprint="p1", has_next=True)
-    assert paused["status"] == "paused" and paused["unique_count"] == 1
-    resumed = sessions.control("douyin-pet", session_id, "resume")
-    assert resumed["session_id"] == session_id and resumed["status"] == "resume_requested"
-    again = sessions.checkpoint("douyin-pet", session_id, [first], url, page_fingerprint="p1", has_next=True)
-    assert again["unique_count"] == 1 and again["raw_observation_count"] == 3
-    assert again["duplicate_count"] == 2 and again["seen_post_ids"] == ["seen-1"]
-    finished = sessions.checkpoint("douyin-pet", session_id,
-                                   [{"platform_post_id": "seen-2", "title": "二号",
-                                     "publish_time_raw": "2025年11月12日 09:46"}],
-                                   url, page_fingerprint="p2", has_next=False, expected_count=2)
-    assert finished["status"] == "scan_completed" and finished["unique_count"] == 2
+def test_confirmed_snapshot_survives_repository_restart(context):
+    repository, _, _, _, _ = context
+    preview = upload([official_row()]).json()
+    result = confirm_snapshot("douyin-pet", preview["preview_id"])
+    assert result.status_code == 200, result.text
+    restarted = OperatorAccountRepository(repository.db_path)
+    persisted = HistoricalPostService(restarted).list_posts("douyin-pet", limit=10)
+    assert len(persisted) == 1
+    assert persisted[0].data_source == "DOUYIN_OFFICIAL_EXPORT"
+    assert persisted[0].platform_post_id == "dy-1"
 
 
-def test_cross_account_repair_is_rejected(context):
-    _, _, _, snapshots, _ = context
-    with pytest.raises(ValueError, match="仅适用于抖音"):
-        snapshots.preview_repair("xhs-developer")
+def test_low_confidence_fingerprint_is_warned_but_repeat_upload_updates_same_record(context):
+    _, _, posts, _, _ = context
+    row = official_row()
+    row.pop("作品 ID")
+    row.pop("发布时间")
+    first = upload([row]).json()
+    assert first["identity_confidence"] == "low"
+    assert any("置信度较低" in warning for warning in first["warnings"])
+    confirm_snapshot("douyin-pet", first["preview_id"])
+    second = upload([row]).json()
+    assert second["insert_count"] == 0 and second["update_count"] == 1
+    confirm_snapshot("douyin-pet", second["preview_id"])
+    assert posts.repository.count_posts("douyin-pet") == 1
+
+
+def test_csv_with_official_headers_remains_generic_import(context):
+    client = TestClient(app, base_url="http://localhost:7860", headers={"Origin": "http://localhost:7860"})
+    response = client.post("/api/operator/accounts/douyin-pet/posts/imports/preview",
+        files={"file": ("作品列表.csv", "作品名称,点赞量\n猫咪作品,12\n".encode(), "text/csv")})
+    assert response.status_code == 200, response.text
+    assert response.json().get("preview_kind") != "snapshot"

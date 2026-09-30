@@ -48,7 +48,6 @@ export default function AccountsPage() {
   const [operatorAccountsErr, setOperatorAccountsErr] = useState('');
   const [historyAccount, setHistoryAccount] = useState<OperatorAccount | null>(null);
   const [diagnosisAccount, setDiagnosisAccount] = useState<OperatorAccount | null>(null);
-  const [autoStartCreatorSync, setAutoStartCreatorSync] = useState(false);
   const [err, setErr] = useState('');
   const [qr, setQr] = useState<QRState | null>(null);
   const [qrNonce, setQrNonce] = useState(0);   // 每次登录 +1，稳定缓存 key，避免每次轮询 img 闪烁
@@ -334,7 +333,7 @@ export default function AccountsPage() {
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
                 <button className="btn btn-sm" style={{ flex: 1 }}
-                  onClick={() => { setDiagnosisAccount(null); setHistoryAccount(account); setAutoStartCreatorSync(false); }}>
+                  onClick={() => { setDiagnosisAccount(null); setHistoryAccount(account); }}>
                   历史内容与导入
                 </button>
                 <button className="btn btn-sm btn-primary" style={{ flex: 1 }}
@@ -347,16 +346,15 @@ export default function AccountsPage() {
         </div>
         {historyAccount && (
           <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载历史内容…</div>}>
-            <HistoricalPostsPanel account={historyAccount} onClose={() => { setHistoryAccount(null); setAutoStartCreatorSync(false); }}
-              autoStartSync={autoStartCreatorSync}
-              onRunDiagnosis={() => { setHistoryAccount(null); setAutoStartCreatorSync(false); setDiagnosisAccount(historyAccount); }} />
+            <HistoricalPostsPanel account={historyAccount} onClose={() => { setHistoryAccount(null); }}
+              onRunDiagnosis={() => { setHistoryAccount(null); setDiagnosisAccount(historyAccount); }} />
           </Suspense>
         )}
         {diagnosisAccount && (
           <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载诊断报告…</div>}>
             <AccountDiagnosisPanel account={diagnosisAccount} onClose={() => setDiagnosisAccount(null)}
-              onOpenHistory={() => { setDiagnosisAccount(null); setHistoryAccount(diagnosisAccount); setAutoStartCreatorSync(false); }}
-              onOpenCreatorSync={() => { setDiagnosisAccount(null); setHistoryAccount(diagnosisAccount); setAutoStartCreatorSync(true); }} />
+              onOpenHistory={() => { setDiagnosisAccount(null); setHistoryAccount(diagnosisAccount); }}
+              onImportDouyinExport={() => { setDiagnosisAccount(null); setHistoryAccount(diagnosisAccount); }} />
           </Suspense>
         )}
       </section>
