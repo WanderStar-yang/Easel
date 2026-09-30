@@ -152,6 +152,24 @@ class OperatorAccountRepository:
                     stale_at TEXT,
                     stale_reason TEXT
                 );
+                CREATE TABLE IF NOT EXISTS account_baselines (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    version INTEGER NOT NULL,
+                    sample_size INTEGER NOT NULL CHECK (sample_size >= 0),
+                    period_start TEXT,
+                    period_end TEXT,
+                    generated_at TEXT NOT NULL,
+                    source_updated_at TEXT,
+                    historical_data_version TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'STALE')),
+                    report_json TEXT NOT NULL,
+                    UNIQUE(account_id, version)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_account_baselines_one_active
+                    ON account_baselines(account_id) WHERE status = 'ACTIVE';
+                CREATE INDEX IF NOT EXISTS idx_account_baselines_history
+                    ON account_baselines(account_id, version DESC);
                 CREATE TABLE IF NOT EXISTS historical_post_archive (
                     account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
                     post_id TEXT NOT NULL,
@@ -192,7 +210,7 @@ class OperatorAccountRepository:
                 conn.execute("ALTER TABLE account_diagnoses ADD COLUMN stale_at TEXT")
             if "stale_reason" not in diagnosis_columns:
                 conn.execute("ALTER TABLE account_diagnoses ADD COLUMN stale_reason TEXT")
-            conn.execute("PRAGMA user_version = 8")
+            conn.execute("PRAGMA user_version = 9")
 
     def seed_defaults(self, now: str) -> None:
         seeds = (
@@ -318,6 +336,10 @@ class OperatorAccountRepository:
             "UPDATE account_diagnoses SET status = 'STALE', stale_at = ?, stale_reason = ? "
             "WHERE account_id = ? AND status != 'STALE'",
             (now, reason, account_id),
+        )
+        conn.execute(
+            "UPDATE account_baselines SET status = 'STALE' WHERE account_id = ? AND status = 'ACTIVE'",
+            (account_id,),
         )
 
     def list_posts(self, account_id: str, *, offset: int = 0, limit: int = 100) -> list[dict[str, Any]]:
@@ -728,3 +750,57 @@ class OperatorAccountRepository:
                 "ORDER BY generated_at DESC, id DESC LIMIT ?", (account_id, limit),
             ).fetchall()
         return [self._diagnosis(row) for row in rows]
+
+    @staticmethod
+    def _baseline(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        report = json.loads(result.pop("report_json"))
+        result.update(report)
+        return result
+
+    def get_latest_baseline(self, account_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM account_baselines WHERE account_id = ? ORDER BY version DESC LIMIT 1",
+                (account_id,),
+            ).fetchone()
+        return self._baseline(row) if row else None
+
+    def list_baselines(self, account_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM account_baselines WHERE account_id = ? ORDER BY version DESC LIMIT ?",
+                (account_id, limit),
+            ).fetchall()
+        return [self._baseline(row) for row in rows]
+
+    def mark_baseline_stale(self, account_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE account_baselines SET status = 'STALE' WHERE account_id = ? AND status = 'ACTIVE'",
+                (account_id,),
+            )
+
+    def save_baseline(self, baseline_id: str, account_id: str, sample_size: int,
+                      period_start: str | None, period_end: str | None, generated_at: str,
+                      source_updated_at: str | None, historical_data_version: str,
+                      report: dict[str, Any]) -> dict[str, Any]:
+        with self._connect() as conn:
+            account = conn.execute("SELECT 1 FROM operator_accounts WHERE id = ?", (account_id,)).fetchone()
+            if account is None:
+                raise AccountNotFoundError(account_id)
+            conn.execute("UPDATE account_baselines SET status = 'STALE' WHERE account_id = ? AND status = 'ACTIVE'",
+                         (account_id,))
+            version = int(conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM account_baselines WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()["next_version"])
+            conn.execute(
+                "INSERT INTO account_baselines "
+                "(id, account_id, version, sample_size, period_start, period_end, generated_at, "
+                "source_updated_at, historical_data_version, status, report_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)",
+                (baseline_id, account_id, version, sample_size, period_start, period_end, generated_at,
+                 source_updated_at, historical_data_version, json.dumps(report, ensure_ascii=False, allow_nan=False)),
+            )
+        return self.get_latest_baseline(account_id) or {}

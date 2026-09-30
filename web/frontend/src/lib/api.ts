@@ -618,6 +618,42 @@ export interface AccountDiagnosisReport {
   ip_business_signals?: { profile_visits_median: number | null; inquiries_median: number | null; interpretation: string };
 }
 
+export interface BaselineMetric {
+  median: number | null;
+  p25: number | null;
+  p75: number | null;
+  sample_count: number;
+  coverage: number;
+}
+
+export interface AccountBaseline {
+  id: string;
+  account_id: string;
+  version: number;
+  sample_size: number;
+  period_start: string | null;
+  period_end: string | null;
+  generated_at: string;
+  source_updated_at: string | null;
+  historical_data_version: string;
+  status: 'ACTIVE' | 'STALE';
+  metrics: Record<string, BaselineMetric>;
+  segments: Record<string, {
+    coverage: number;
+    classified_sample_count: number;
+    groups: Array<{ key: string; sample_size: number; metrics: Record<string, BaselineMetric>; eligible_for_comparison: boolean }>;
+    insufficient_group_count: number;
+  }>;
+  classification_coverage?: Record<string, number>;
+}
+
+export interface AccountBaselinePreview extends Omit<AccountBaseline, 'id' | 'account_id' | 'version' | 'generated_at' | 'source_updated_at' | 'status'> {
+  generated_at: string;
+  metric_todo: string[];
+  classification_coverage: Record<string, number>;
+  content_type_coverage: number;
+}
+
 export interface HistoricalRepairPreview {
   preview_id: string;
   account_id: string;
@@ -721,6 +757,25 @@ export function fetchLatestDiagnosis(accountId: string): Promise<AccountDiagnosi
 
 export function fetchDiagnosisHistory(accountId: string): Promise<AccountDiagnosisReport[]> {
   return request<AccountDiagnosisReport[]>(`/api/operator/accounts/${encodeURIComponent(accountId)}/diagnosis/history`);
+}
+
+export function fetchLatestBaseline(accountId: string): Promise<AccountBaseline | null> {
+  return request<AccountBaseline | null>(`/api/operator/accounts/${encodeURIComponent(accountId)}/baseline`);
+}
+
+export function fetchBaselineHistory(accountId: string): Promise<AccountBaseline[]> {
+  return request<AccountBaseline[]>(`/api/operator/accounts/${encodeURIComponent(accountId)}/baseline/history`);
+}
+
+export function previewAccountBaseline(accountId: string): Promise<AccountBaselinePreview> {
+  return request<AccountBaselinePreview>(`/api/operator/accounts/${encodeURIComponent(accountId)}/baseline/preview`, { method: 'POST' });
+}
+
+export function generateAccountBaseline(accountId: string, historicalDataVersion: string): Promise<AccountBaseline> {
+  return request<AccountBaseline>(`/api/operator/accounts/${encodeURIComponent(accountId)}/baseline`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ historical_data_version: historicalDataVersion }),
+  });
 }
 
 export interface AccountWhoami {

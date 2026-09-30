@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   fetchDiagnosisHistory, fetchHistoricalPosts, fetchLatestDiagnosis,
-  getHistoricalCompleteness, runAccountDiagnosis,
+  getHistoricalCompleteness, runAccountDiagnosis, fetchLatestBaseline,
 } from '../lib/api';
-import type { AccountDiagnosisReport, HistoricalCompleteness, OperatorAccount } from '../lib/api';
+import type { AccountBaseline, AccountDiagnosisReport, HistoricalCompleteness, OperatorAccount } from '../lib/api';
 
 function formatMetric(value: unknown): string {
   return typeof value === 'number' ? new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(value) : '暂无数据';
@@ -22,8 +22,8 @@ function postTime(value: unknown): string {
   return typeof value === 'string' && value ? new Date(value).toLocaleDateString('zh-CN') : '';
 }
 
-export default function AccountDiagnosisPanel({ account, onClose, onOpenHistory, onImportDouyinExport }: {
-  account: OperatorAccount; onClose: () => void; onOpenHistory: () => void; onImportDouyinExport: () => void;
+export default function AccountDiagnosisPanel({ account, onClose, onOpenHistory, onImportDouyinExport, onOpenBaseline }: {
+  account: OperatorAccount; onClose: () => void; onOpenHistory: () => void; onImportDouyinExport: () => void; onOpenBaseline: () => void;
 }) {
   const [postCount, setPostCount] = useState(0);
   const [rawCount, setRawCount] = useState(0);
@@ -33,21 +33,24 @@ export default function AccountDiagnosisPanel({ account, onClose, onOpenHistory,
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [historyCount, setHistoryCount] = useState(0);
+  const [baseline, setBaseline] = useState<AccountBaseline | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [posts, quality, latest, history] = await Promise.all([
+      const [posts, quality, latest, history, latestBaseline] = await Promise.all([
         fetchHistoricalPosts(account.id), getHistoricalCompleteness(account.id),
         fetchLatestDiagnosis(account.id).catch(() => null),
         fetchDiagnosisHistory(account.id).catch(() => []),
+        fetchLatestBaseline(account.id).catch(() => null),
       ]);
       setPostCount(posts.total);
       setRawCount(posts.raw_total ?? posts.total);
       setCompleteness(quality);
       setDiagnosis(latest);
       setHistoryCount(history.length);
+      setBaseline(latestBaseline);
     } catch {
       setError('加载账号历史或完整度失败，请重试。');
     } finally {
@@ -104,6 +107,20 @@ export default function AccountDiagnosisPanel({ account, onClose, onOpenHistory,
           {running ? '正在诊断…' : diagnosis ? '重新诊断' : '开始诊断'}
         </button>}
       </div>
+
+      {diagnosis && !stale && postCount > 0 && (
+        <section className="card" style={{ marginTop: 14, padding: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <strong>{baseline?.status === 'ACTIVE' ? '历史基准已建立' : baseline?.status === 'STALE' ? '历史基准需要更新' : '诊断已完成，可以建立历史基准'}</strong>
+            <div className="page-subtitle" style={{ marginTop: 4 }}>
+              {baseline?.status === 'STALE' ? '历史数据已发生变化，请重新生成基准。' : '基准只记录历史作品的典型表现，不提供运营建议。'}
+            </div>
+          </div>
+          <button className="btn btn-sm btn-primary" onClick={onOpenBaseline}>
+            {baseline?.status === 'ACTIVE' ? '查看历史基准' : baseline?.status === 'STALE' ? '重新生成历史基准' : '建立历史基准'}
+          </button>
+        </section>
+      )}
 
       {postCount === 0 && !loading && (
         <div role="status" className="card" style={{ marginTop: 14, padding: 16 }}>

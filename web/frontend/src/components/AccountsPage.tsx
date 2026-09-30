@@ -9,6 +9,7 @@ import { getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
 
 const AccountDiagnosisPanel = lazy(() => import('./AccountDiagnosisPanel'));
 const HistoricalPostsPanel = lazy(() => import('./HistoricalPostsPanel'));
+const AccountBaselinePanel = lazy(() => import('./AccountBaselinePanel'));
 
 type QRState = {
   platform: string;
@@ -48,6 +49,7 @@ export default function AccountsPage() {
   const [operatorAccountsErr, setOperatorAccountsErr] = useState('');
   const [historyAccount, setHistoryAccount] = useState<OperatorAccount | null>(null);
   const [diagnosisAccount, setDiagnosisAccount] = useState<OperatorAccount | null>(null);
+  const [baselineAccount, setBaselineAccount] = useState<OperatorAccount | null>(null);
   const [err, setErr] = useState('');
   const [qr, setQr] = useState<QRState | null>(null);
   const [qrNonce, setQrNonce] = useState(0);   // 每次登录 +1，稳定缓存 key，避免每次轮询 img 闪烁
@@ -354,7 +356,14 @@ export default function AccountsPage() {
           <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载诊断报告…</div>}>
             <AccountDiagnosisPanel account={diagnosisAccount} onClose={() => setDiagnosisAccount(null)}
               onOpenHistory={() => { setDiagnosisAccount(null); setHistoryAccount(diagnosisAccount); }}
-              onImportDouyinExport={() => { setDiagnosisAccount(null); setHistoryAccount(diagnosisAccount); }} />
+              onImportDouyinExport={() => { setDiagnosisAccount(null); setHistoryAccount(diagnosisAccount); }}
+              onOpenBaseline={() => { setDiagnosisAccount(null); setBaselineAccount(diagnosisAccount); }} />
+          </Suspense>
+        )}
+        {baselineAccount && (
+          <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载历史基准…</div>}>
+            <AccountBaselinePanel account={baselineAccount} onClose={() => { setBaselineAccount(null); setDiagnosisAccount(baselineAccount); }}
+              onOpenHistory={() => { setBaselineAccount(null); setDiagnosisAccount(null); setHistoryAccount(baselineAccount); }} />
           </Suspense>
         )}
       </section>

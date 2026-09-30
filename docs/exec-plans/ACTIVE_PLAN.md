@@ -1,10 +1,10 @@
 # AI Social Operator V1 — Active Implementation Plan
 
-- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6 已完成；未开始 Phase 4
+- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6、Phase 4 已完成；未开始 Phase 5
 - 更新日期：2026-09-30
 - 源码基线：Easel `main` at `0cab7ca6f6e8286635d25fe2435dda11a975ffec`
 - 本计划依据：`../../AGENTS.md`、`../product-specs/AI_SOCIAL_OPERATOR_V1.md`、`PLANS.md`、`../audits/EASEL_V1_SOURCE_AUDIT.md` 及当前仓库源码
-- 本轮边界：只执行 Phase 3.6 Diagnosis UX & Data Integrity；不开始 Phase 4
+- 本轮边界：只执行 Phase 4 Account Baseline；不开始 Phase 5 Strategy Recommendation 或后续运营能力
 
 ## 1. 文档与路径核对
 
@@ -268,3 +268,36 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 - 当前全量 Python 测试：374 passed、6 skipped；前端 `npm run build` 通过；Lint 通过，保留两条既有 warning；无独立前端测试脚本。
 - 真实数据库完成 Repair 与重诊断：82 条有效作品，202 条旧记录归档。通过重启后的真实应用和用户已打开的 Chrome Easel 标签验收：82 条、80%完整度、可信度“中等”、Top/Low 各 5 条、旧文案无污染；普通页面未显示 UNKNOWN / content_source / threshold 等内部字段。手动标记过期后，页面显示“历史数据已更新，当前诊断已过期”，旧报告折叠，重新诊断后恢复最新正文。历史页批量分类入口也已在真实 UI 看到；批量接口通过账号隔离测试。
 - Phase 4 未开始。Baseline、Strategy Recommendation 等后续能力仍等待单独确认。
+
+## 13. Phase 4 执行记录：Account Baseline
+
+### 启动检查与范围
+
+- 开始前重新完整读取 `AGENTS.md`、产品规格、`PLANS.md`、本计划和源码审计；核对 Phase 1–3.6 实现及 `git status` / `git diff`。
+- Phase 3.6 独立 checkpoint：`79e6f43`（`Checkpoint social operator Phase 3.6 diagnosis UX and data integrity`）。Phase 4 改动单独保留在工作区。
+- 本轮只实现历史基准、显式预览/建立/重生成、版本追踪、陈旧标记、展示和比较服务接口；不开始 Phase 5 Strategy Recommendation、Phase 6 Strategy Confirmation、Topic Engine、每日 3 选 1 或内容生成。
+
+### 数据模型与计算
+
+- 新增 SQLite `account_baselines`（schema version 9），保存 id、account_id、version、sample_size、period_start/end、generated_at、source_updated_at、historical_data_version、ACTIVE/STALE 状态及完整指标/分组快照。唯一部分索引确保每账号最多一个 ACTIVE 版本。
+- 计算输入为 Phase 3.6 `canonical_unique_posts()` 输出。活动唯一作品作为 sample_size；稳定键重复记录只取 canonical 行，`source_presence=MISSING` 与归档记录排除。整体计算不要求已有内容分类。
+- 指标采用 Median；另外保存 nearest-rank P25/P75、样本数、coverage。互动率逐帖沿用 `available interactions / views`：只累加非空互动字段，views 必须大于 0，真实 0 保留，missing 不补 0；账号中位数只取有效逐帖率。
+- 字段范围包含播放、点赞、评论、收藏、分享、互动率、涨粉、主页访问和咨询。官方 XLSX parser 当前未映射完播率、2 秒跳出率、平均播放时长，这三项保存 null/0 样本并列入 TODO；没有把作品长度当作平均观看时长。
+- 分组支持 content_source、content_type、subjects、hook_type、duration_bucket、publish_period。未知/未分类不创建分组；样本 ≥3 展示初步基准，≥5 标记为可供未来正式比较。
+- 每账号首次生成 V1，重生成递增版本；历史版本保留。历史数据变更入口沿用仓储统一 stale helper，新增、更新、分类、删除、重复修复、快照对账都会令 ACTIVE Baseline 变为 STALE；GET 同时校验历史数据版本以发现遗漏变更。
+- `compare_to_baseline()` 为未来的新发布指标提供 views、likes、engagement_rate 相对中位数和 P25/P75 区间能力。此处不生成 Weekly Review。
+
+### API 与 UI
+
+- 新增 `/api/operator/accounts/{account_id}/baseline`（当前版本/显式生成）、`/preview`、`/history` 和 `/compare`，所有访问均按 account_id 隔离。
+- Diagnosis 有效时展示“建立历史基准”；已建立时展示“查看历史基准”；数据变动后显示 stale 提示及重新生成入口。建立前 UI 展示作品数、时间范围、播放/互动率/分类覆盖，必须点击确认后持久化。
+- 普通用户页面说明 Baseline 用途，展示典型中位数、每项样本与覆盖率、P25/P75、分类基准及未完成分类入口；不显示 UNKNOWN/未分类基准。
+
+### 自动测试与验收
+
+- 新增 `tests/test_social_operator_baseline.py`，覆盖 canonical 去重、重复行忽略、Median/P25/P75、极端值、missing/zero、互动率和 views=0 排除、覆盖率、整体无分类可建、分组门槛、版本 1/2、单 ACTIVE、stale（新增/修改/分类/删除/Repair）、账号隔离、比较接口、重启持久化、过期 Diagnosis 门禁和 API 预览确认。
+- 真实抖音账号 UI 验收使用独立端口运行当前版本，未中断用户原有 7860 实例。真实数据库为 82 条活动作品、0 条 MISSING；预览并确认生成 V1。周期 2025-06-24～2026-09-28；播放覆盖 82/82；互动率覆盖 82/82；内容类型覆盖 0%。
+- 真实 Baseline：播放中位数 578.5（P25 308，P75 988）；点赞 8；评论 0.5；收藏 0；分享 1；互动率 2.02%；涨粉 0；主页访问 3；咨询为空。播放中位数与 Diagnosis 一致；692,689 播放作品保留在历史样本，但没有扭曲中位数。未分类字段未生成 UNKNOWN 分组；发布时间段因真实发布时间存在，作为独立维度生成分组。
+- UI 实际确认后 SQLite 已保存 ACTIVE Baseline V1，sample_size 82；服务重启持久化由自动化测试覆盖。完播率、2 秒跳出率和平均播放时长仍是解析 TODO。
+- 最终 `.venv/bin/python -m pytest -q`：388 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning；前端 `npm run build` 通过；`npm run lint` 通过，保留两条既有 warning（`linkifyOutputs.ts` 无用转义、`AccountsPage.tsx` Hook 依赖）；`git diff --check` 通过。
+- 真实 UI 已重新载入验证 Diagnosis 显示“历史基准已建立”与“查看历史基准”。Phase 4 验收项通过；Phase 5 未开始，等待用户确认。

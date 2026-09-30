@@ -169,3 +169,35 @@ class AccountDiagnosis:
             "algorithm_version": self.algorithm_version,
             **self.report,
         }
+
+
+@dataclass(frozen=True)
+class AccountBaseline:
+    id: str
+    account_id: str
+    version: int
+    sample_size: int
+    period_start: str | None
+    period_end: str | None
+    generated_at: str
+    source_updated_at: str | None
+    historical_data_version: str
+    status: str
+    metrics: dict[str, object]
+    segments: dict[str, object]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "account_id": self.account_id,
+            "version": self.version,
+            "sample_size": self.sample_size,
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "generated_at": self.generated_at,
+            "source_updated_at": self.source_updated_at,
+            "historical_data_version": self.historical_data_version,
+            "status": self.status,
+            "metrics": self.metrics,
+            "segments": self.segments,
+        }

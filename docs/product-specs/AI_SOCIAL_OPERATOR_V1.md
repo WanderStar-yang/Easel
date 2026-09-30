@@ -437,28 +437,35 @@ AI工具
 
 # 10. Account Baseline
 
-首次诊断完成后必须建立：
+首次诊断完成后由用户预览并确认建立 `AccountBaseline`。Diagnosis 回答“历史账号有什么特点”，Baseline 只回答“历史账号的典型表现是多少”；Baseline 不生成定位、内容建议、选题或运营策略。两者都直接读取 account-scoped canonical unique `HistoricalPost`，不从 Diagnosis 自然语言报告反推。
+
+Overall Baseline 必须可在作品分类尚未完成时建立。统计样本只包含未被完整快照标记缺失的 canonical unique 历史作品；原始重复行、已归档记录和旧扫描污染行均不计入 `sampleSize`。有效作品即使缺少某个指标，仍计入整体作品样本数，但该指标的样本数与覆盖率单独计算。
+
+持久化记录需要保留生成版本和输入版本，至少包括：
 
 ```text
 AccountBaseline
+- id
 - accountId
+- version
 - sampleSize
 - periodStart
 - periodEnd
-- viewsMedian
-- likesMedian
-- commentsMedian
-- favoritesMedian
-- sharesMedian
-- engagementRateMedian
-- followersGainMedian
-- profileVisitsMedian
-- contentTypeBaselines[]
-- sourceBaselines[]
 - generatedAt
+- sourceUpdatedAt
+- historicalDataVersion
+- status: ACTIVE | STALE
+- metrics: median, p25, p75, sampleCount, coverage
+- segments[]
 ```
 
-Baseline 是以后判断策略是否有效的比较基准。
+每个指标均需保存 `sampleCount` 和 `coverage = sampleCount / sampleSize`。数据缺失保存 `null`，不能填 0；真实 0 是有效观测。单条作品互动率沿用 Phase 3 的透明公式：可用的点赞、评论、收藏、分享之和除以 `views`；缺失互动项不补 0，且 `views` 必须大于 0。账号级互动率使用有效单条互动率的中位数，不使用总互动数除以总播放数替代。
+
+中位数是核心值；可附 P25/P75 表示历史通常区间。分组维度为 `content_source`、`content_type`、`subjects`、`hook_type`、`duration_bucket` 和 `publish_period`。分组必须有真实非空分类，不能生成 UNKNOWN/未分类组；分组样本至少 3 条才展示初步基准，至少 5 条才标为可用于后续正式比较。分类不完整不得阻止 Overall Baseline。
+
+首次生成是 V1。重新生成创建 V2、V3 等新记录，旧版本保留；每个账号只有一个 ACTIVE Baseline。HistoricalPost 新增、删除、修复、更新关键指标或分类时，活动 Baseline 转为 STALE，页面提示“历史数据已发生变化，请重新生成基准。”建立前需预览有效作品数、日期范围、指标覆盖和分类覆盖，再由用户确认写入。
+
+Baseline 是后续判断新内容相对历史表现的比较基准。Phase 4 仅提供 compare-to-baseline 服务能力，不实现 Weekly Review、Strategy Recommendation 或内容生成。
 
 例如：
 

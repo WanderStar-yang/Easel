@@ -394,7 +394,27 @@ V1 抖音历史数据以 PC 端抖音创作者中心官方导出的作品列表 
 
 ## 目标
 
-建立账号历史基线。
+建立可追溯版本的账号历史表现基准。Diagnosis 是描述性分析报告；Baseline 只保存历史典型表现，不输出策略、定位、内容建议或选题。
+
+## 数据来源与持久化
+
+- 输入为 account-scoped canonical unique HistoricalPost；排除归档重复和完整快照标记为 MISSING 的行。整体样本数为有效唯一作品数，指标样本数各自统计。
+- 新增 SQLite `account_baselines`，保留 version、period、生成时间、source_updated_at、historical_data_version、status 和完整指标/分组快照；同账号仅允许一个 ACTIVE 版本，重生成将旧版本转为 STALE 并递增版本号。
+- 通过存储写入时的 stale 标记及读取时的历史数据版本核对，覆盖 HistoricalPost 新增、删除、修复、指标和分类修改。
+
+## 指标和分组
+
+- 指标包括 views、likes、comments、favorites、shares、engagement_rate、followers_gain、profile_visits、inquiries；当前 HistoricalPost 未保存的 completion_rate、two_sec_bounce_rate、avg_watch_duration 保持 null，并记录后续解析 TODO。
+- 指标保存 median、P25、P75、sample_count 和 coverage。P25/P75 使用 nearest-rank 百分位数；Median 是主要统计值。
+- 互动率沿用 Phase 3 的逐帖公式：已存在互动数之和 / views，仅对 views > 0 且至少有一个互动字段的作品计算；再对有效逐帖比率取中位数。
+- 内容分组覆盖 content_source、content_type、subjects、hook_type、duration_bucket、publish_period。UNKNOWN/空分类不生成组；group sample ≥3 显示初步基准，≥5 标记为可供未来正式比较。
+- Diagnosis 当前有效是建立入口前置。预览给出样本数、日期范围、指标和分类覆盖；用户显式确认后保存。
+
+## API / UI / 比较接口
+
+- 新增 `/api/operator/accounts/{account_id}/baseline` 读取当前版本、显式生成新版本；`/preview` 生成确认前快照；`/history` 读取版本历史；`/compare` 提供 views、likes、engagement_rate 相对中位数及 P25/P75 区间比较。
+- Diagnosis 页面显示 Baseline 状态和建立/查看/重新生成入口。普通用户页面展示典型中位数、逐项样本和覆盖率、时间范围、分组基准和分类不足入口，不暴露 UNKNOWN 分组。
+- Baseline stale 时提示“历史数据已发生变化，请重新生成基准。”新内容的比较由服务层复用，不在本 Phase 实现 Weekly Review。
 
 ## 必须包含
 
@@ -415,10 +435,9 @@ V1 抖音历史数据以 PC 端抖音创作者中心官方导出的作品列表 
 
 ## 验收
 
-- Baseline 基于真实历史样本
-- 显示样本数
-- 显示时间范围
-- 可作为后续 Weekly Review 对照
+- 测试 canonical 唯一作品、Median/P25/P75、missing 与真实 0、互动率、样本数/覆盖率、整体与分组门槛、V1/V2/唯一 ACTIVE、stale、账号隔离、异常值、重启持久化和 Phase 3 Diagnosis 回归。
+- 用真实抖音账号在 UI 预览并建立基准；有效样本应为 82，与 Diagnosis 播放中位数一致，未分类数据不生成 UNKNOWN 分组，693000 级真实高播放不扭曲 Median。
+- 完成后停止，不开始 Phase 5 Strategy Recommendation。
 
 ---
 

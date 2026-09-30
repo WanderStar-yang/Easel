@@ -16,6 +16,9 @@ All notable changes to Easel are documented in this file.
 
 - Improved Initial Diagnosis with a canonical unique-post view, user-readable summaries and confidence explanations, understandable missing-data language, stale-report collapse, and a reordered diagnosis page. Official Douyin XLSX rows now anchor repair of uniquely matched legacy browser-scan records.
 - Added account-scoped batch classification for historical posts (REAL/AI/MIXED, content type, and subjects) so users can prepare data for future content comparisons.
+- Added versioned AccountBaseline snapshots with canonical-post medians, P25/P75, per-metric sample counts and coverage, classified segment baselines, stale tracking, explicit preview/confirmation, and a compare-to-baseline service/API.
+- Added a user-facing history baseline panel with sample/date/coverage preview, classification guidance, historical version access, and create/view/regenerate actions.
+- Established the current Douyin pet account's Baseline V1 from 82 canonical historical posts; its views median is 578.5 and engagement-rate median is 2.02%.
 
 ### Fixed
 
