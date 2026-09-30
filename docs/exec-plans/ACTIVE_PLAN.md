@@ -1,10 +1,10 @@
 # AI Social Operator V1 — Active Implementation Plan
 
-- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6、Phase 4 已完成；未开始 Phase 5
+- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6、Phase 4 已完成；Phase 4.5/4.5.1 代码实现完成；真实模型连接、历史分类审核和 Baseline V2 验收进行中；未开始 Phase 5
 - 更新日期：2026-09-30
 - 源码基线：Easel `main` at `0cab7ca6f6e8286635d25fe2435dda11a975ffec`
 - 本计划依据：`../../AGENTS.md`、`../product-specs/AI_SOCIAL_OPERATOR_V1.md`、`PLANS.md`、`../audits/EASEL_V1_SOURCE_AUDIT.md` 及当前仓库源码
-- 本轮边界：只执行 Phase 4 Account Baseline；不开始 Phase 5 Strategy Recommendation 或后续运营能力
+- 本轮边界：完成 Phase 4.5 Historical Content Enrichment 真实验收和 Provider 调用修复；不开始 Phase 5 Strategy Recommendation 或后续运营能力
 
 ## 1. 文档与路径核对
 
@@ -301,3 +301,61 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 - UI 实际确认后 SQLite 已保存 ACTIVE Baseline V1，sample_size 82；服务重启持久化由自动化测试覆盖。完播率、2 秒跳出率和平均播放时长仍是解析 TODO。
 - 最终 `.venv/bin/python -m pytest -q`：388 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning；前端 `npm run build` 通过；`npm run lint` 通过，保留两条既有 warning（`linkifyOutputs.ts` 无用转义、`AccountsPage.tsx` Hook 依赖）；`git diff --check` 通过。
 - 真实 UI 已重新载入验证 Diagnosis 显示“历史基准已建立”与“查看历史基准”。Phase 4 验收项通过；Phase 5 未开始，等待用户确认。
+
+## 14. Phase 4.5 执行记录：Historical Content Enrichment
+
+### 启动检查与 checkpoint
+
+- 开始前重新检查了 Phase 4 的 `git status`、完整 `git diff` 和缓存差异；Phase 4 实现、文档和测试均在独立工作区改动中，没有 Phase 5 内容。
+- Phase 4 独立 checkpoint：`3646ba8`（`Checkpoint social operator Phase 4 account baseline`）。Phase 4.5 改动尚未提交。
+- 本轮范围只包括三个历史分类字段、AI 文本建议、用户确认、覆盖率、Segment Baseline 更新；Hook 保持未分析。
+
+### 已实现
+
+- 新增 `historical_post_classification_metadata`，按作品/字段保留 `value_json`、来源（IMPORT / AI_CONFIRMED / MANUAL_CONFIRMED）、confidence 和 confirmed_at；新增独立 `historical_post_classification_suggestions` 保存 SUGGESTED/CONFIRMED 建议。
+- 新增 `HistoricalClassificationService` 和 Easel OpenClaw 网关适配。Prompt 只传作品标题、原始作品类型、已有 tags、描述/备注，不传播放、点赞或其他表现字段。输出受控于固定枚举；无效/缺失字段回退 UNKNOWN/LOW。
+- AI 建议与最终标签分离；仅接受时更新 HistoricalPost，MANUAL_CONFIRMED 字段不被 AI 覆盖。人工批量标签限制在 V1 内容类型/主体枚举。
+- 新增分类建议/进度/行项目 API。历史页面改为批量审核表格，提供全部、未分类、低置信度、AI 建议过滤；按三个字段展示 AI 置信度；支持批量人工设置、接受所选建议和有确认数量提示的全部接受高置信度建议。
+- 分类确认复用仓储的数据变更 stale 标记，使 AccountBaseline stale；重新运行 Diagnosis 后可按现有 Baseline 确认流程生成 V2，并由 Phase 4 规则生成 REAL/AI、主体和内容类型分组。
+- 测试覆盖 AI 输入不含表现指标、UNKNOWN fallback、置信度规范、人工优先、批量分类元数据、未分类/低置信度/建议结果、全部接受高置信度、账号隔离、进度、Baseline stale/V2/分组和 Phase 4 Overall Median 回归。
+
+### 尚待验收 / 当前环境限制
+
+- 自动测试：398 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning；前端 `npm run build` 通过；`npm run lint` 通过，保留两条既有 warning；`git diff --check` 通过。
+- 在独立端口 7871 的真实 UI 中打开当前账号批量分类页，确认有效作品 82 条、三类覆盖均为 0%，表格显示标题/播放/标签/置信度列；点击 AI 预分类后页面正确显示模型网关不可用提示。没有写入 AI 结果或改动用户作品。
+- 真实账号仍为 82 条 canonical unique 作品，当前 V1 分类覆盖为 0%。因本机模型网关不可用，真实 AI 预分类尚未运行，因此未抽查 20 条、未做人工校正/批量确认，也未生成 Baseline V2。
+- 当前机器没有 `openclaw` 可执行文件、Easel `easel` profile 配置或可用模型网关。`scripts/gateway.sh status` 显示 profile easel / port 37289 未运行；尝试 `start` 后日志为 `openclaw: No such file or directory`。应用的 AI 预分类 API 已实现并能在网关恢复后调用，但不能把测试替身或 UNKNOWN 默认值冒充真实分类结果。
+- 因上述限制，Phase 4.5 代码和自动测试可验收，真实 AI/账号闭环验收未完成。Phase 5 未开始。
+
+## 15. Phase 4.5.1 执行记录：Model Provider / AI Classification Runtime Fix
+
+### 源码确认的根因
+
+- 原 `OpenClawHistoricalClassifier` 在分类业务模块内直接请求 Easel Gateway health 与 Chat Completions URL，并硬编码 `openclaw/default`；因此即使 `.env` 已存在 API 兼容模型配置，分类仍完全依赖 Gateway。
+- Easel 的模型配置由现有 `.env` 与 Web「设置 → 模型配置」管理；当前槽位包含 OpenAI-compatible (`OPENAI_*`)、Anthropic-compatible (`EASEL_LLM_*`) 和 Anthropic (`ANTHROPIC_API_KEY`)，模型连通性自测在 `web/app.py`。当前核心聊天/Agent 同时依赖 OpenClaw；项目 `setup.sh` / `setup.ps1` 安装 `openclaw@latest`，`easel doctor` 也将其列为 Easel 运行环境依赖。因此 OpenClaw 对整个 Easel Agent 工作流是项目依赖，但它不是历史分类功能唯一可用的模型 API。
+- 修复复用仓库已有 `httpx` 运行依赖和模型设置，不另加 AI SDK，不做全局安装。
+
+### 已实现
+
+- 新增 provider-neutral `easel/ai_service.py`，集中解析已有 `.env` 模型配置、发起 Chat Completions / Anthropic-compatible 请求，并将 Gateway 留作可选回退。分类模块只依赖 AIService 抽象，不直接知道厂商或 Gateway 路径。
+- 新增分类 Runtime 状态接口与页面状态提示：AVAILABLE / NOT_CONFIGURED / UNAVAILABLE / ERROR；模型未配置或不可用时提供现有模型设置入口，手动批量分类仍然可用。
+- 保持每批最多 20 条和作品编辑信息白名单；模型响应按 post_id 独立验证，单条损坏不丢弃同批其它有效建议，批次错误不会中止后续批次。
+- 测试覆盖无配置、兼容 Provider 请求路径、模型状态、字段白名单、每批 20 条、逐条失败以及后续批次继续。
+
+### 验证与限制
+
+- 全量 `.venv/bin/python -m pytest -q`：407 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning。前端 `npm run build` 通过；`npm run lint` 通过并保留两条既有 warning；`git diff --check` 通过。
+- 用户已在 Easel 现有 Chat 模型设置中保存 Qwen OpenAI-compatible Provider（界面模型名为 Qwen3.7-Plus）。密钥保存在被 Git 忽略的本机 `.env`；提交内容不包含 `.env` 或真实密钥。
+- 用户提供的工作空间专属 Base URL 符合阿里云文档格式。用户关闭 VPN 时截图显示“模型请求…”错误，但 HTTP 状态码被界面列宽截断；之后的本机探测发生在用户重新打开 VPN 后，DNS/SSRF 拦截结果不能解释此前截图。本次改动为模型自测失败状态增加完整悬停详情，待在目标网络状态下复测并记录 HTTP 状态码。
+- 当前证据不足以确认模型连接成功。真实 AI 预分类、20 条抽样质量统计、人工审核/确认、分类覆盖率以及 Baseline V2/Segment Baseline 均尚未完成。Phase 5 未开始。
+
+## 16. Phase 4.5 真实验收工作计划
+
+本节是当前待执行清单。必须按顺序完成并记录结果；模型连接失败时停止后续真实分类，不用测试替身代替真实结果。
+
+1. **确认 Provider 连通**：在用户指定的目标网络状态下重试 Easel「测试连接」，读取完整错误详情；核对工作空间专属 Base URL、模型 ID 与同一工作空间的 API Key。确认实际 Chat Completion 成功后才进入下一步。
+2. **20 条抽样**：从 82 条 canonical unique 历史作品中抽取至少 20 条；检查标题、AI 三字段建议和各字段 confidence，统计完全正确、部分正确、明显错误、无法判断。若明显错误率不可接受，先调整保守 Prompt 并重新抽样。
+3. **其余作品建议**：抽样达到可接受水平后，按每批不超过 20 条完成其余作品建议。逐字段保留 SUGGESTED，人工确认优先；记录内容来源、出镜主体、内容类型各自的 AI 建议数、人工确认数和 UNKNOWN 数，不为追求覆盖强行分类。
+4. **人工审核与确认**：在真实页面过滤 AI 建议、低置信度和未分类作品，人工修正后确认；批量接受前检查界面显示的作品/字段数量。确认后核对 V1 Baseline 已变为 STALE。
+5. **Baseline V2**：按既有流程更新 Diagnosis 并显式预览、生成 V2。确认 sample_size 仍基于 82 条有效唯一作品、Overall Median 与 V1 基本一致；记录 REAL/AI、缅因/布偶/双猫和 content_type 分组，样本 <3 不展示，3–4 仅初步展示，≥5 标记可供后续比较。
+6. **收尾验收**：运行 Python tests、前端 build/lint、`git diff --check`；完成真实 UI 流程检查并更新本计划与 CHANGELOG。只汇报 Phase 4.5 是否满足进入 Phase 5 的条件，等待用户确认，不开始 Phase 5。

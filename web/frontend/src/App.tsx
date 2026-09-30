@@ -734,7 +734,7 @@ export default function App() {
       case 'outputs':
         return <OutputsPage jumpPath={outputsJump} onJumpHandled={clearOutputsJump} />;
       case 'accounts':
-        return <AccountsPage />;
+        return <AccountsPage onOpenSettings={() => setSettingsOpen(true)} />;
       case 'profile':
         return <ProfilePage persona={selectedPersona} onNewProfile={() => setShowWizard(true)} onDeleted={handleProfileDeleted} />;
       default:

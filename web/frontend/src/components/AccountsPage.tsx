@@ -43,7 +43,7 @@ function Avatar({ url, name }: { url?: string; name: string }) {
   return <div className="account-avatar account-avatar-fallback">{initial}</div>;
 }
 
-export default function AccountsPage() {
+export default function AccountsPage({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [operatorAccounts, setOperatorAccounts] = useState<OperatorAccount[]>([]);
   const [operatorAccountsErr, setOperatorAccountsErr] = useState('');
@@ -349,6 +349,7 @@ export default function AccountsPage() {
         {historyAccount && (
           <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载历史内容…</div>}>
             <HistoricalPostsPanel account={historyAccount} onClose={() => { setHistoryAccount(null); }}
+              onOpenSettings={onOpenSettings}
               onRunDiagnosis={() => { setHistoryAccount(null); setDiagnosisAccount(historyAccount); }} />
           </Suspense>
         )}

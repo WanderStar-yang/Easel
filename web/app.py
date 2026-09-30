@@ -1355,7 +1355,24 @@ def _model_channels() -> dict:
                 })
     except Exception:  # noqa: BLE001
         pass
+    # Social Operator uses the selected custom OpenAI-compatible provider directly through
+    # AIService. Keep this row visible even when there is no OpenClaw profile/Gateway.
+    social_name = (env.get("EASEL_AI_PROVIDER_NAME") or "").strip()
+    social_base = (env.get("EASEL_AI_BASE_URL") or "").strip()
+    social_model = (env.get("EASEL_AI_MODEL") or "").strip()
+    social_key = (env.get("EASEL_AI_API_KEY") or "").strip()
+    if social_name and social_name.lower() != "disabled" and not any(r["name"] == social_name for r in custom_rows):
+        custom_rows.insert(0, {
+            "slot": "custom", "order": 0, "name": social_name, "sub": "OpenAI 兼容 · AIService",
+            "type": "openai", "model": social_model, "baseUrl": social_base,
+            "keyMasked": _mask_key(social_key), "role": "主", "result": "已配置" if social_key else "缺 key",
+            "deletable": True,
+        })
     chat_rows.extend(custom_rows)
+    if social_name and social_name.lower() != "disabled":
+        for row in chat_rows:
+            row["role"] = "主" if row.get("name") == social_name else "备"
+    chat_rows.sort(key=lambda row: (0 if row.get("role") == "主" else 1, row.get("order", 0)))
 
     sf = bool((env.get("SILICONFLOW_API_KEY") or "").strip())
     trans_rows = [
@@ -1592,6 +1609,8 @@ async def api_settings_models_save(req: ModelSaveRequest):
     is_chat = (req.channel or '').strip() == 'chat'
     _cur_env = _read_env()
     _cur_prov = _openclaw_provider_creds() if is_chat else {}
+    selected_social_provider: dict[str, str] | None = None
+    has_explicit_primary = any(getattr(item, 'primary', False) for item in req.rows)
     for row in req.rows:
         slot = (row.slot or '').strip()
         name = (row.name or '').strip().lower()
@@ -1652,6 +1671,25 @@ async def api_settings_models_save(req: ModelSaveRequest):
             provider_updates[name] = {'model': model, 'base': base, 'key': key}
             keep_custom.add(name)
             pkey = name
+            if getattr(row, 'primary', False) or (not has_explicit_primary and selected_social_provider is None):
+                # Store the selected compatible provider in Easel's existing .env so
+                # Social Operator does not depend on an OpenClaw profile or process.
+                effective_key = key or _cur_env.get('EASEL_AI_API_KEY', '').strip()
+                old_name = _cur_env.get('EASEL_AI_PROVIDER_NAME', '').strip()
+                old_base = _cur_env.get('EASEL_AI_BASE_URL', '').strip().rstrip('/')
+                old_key = _cur_env.get('EASEL_AI_API_KEY', '').strip()
+                if old_key and (base != old_base or (old_name and name != old_name)) and not key:
+                    raise HTTPException(400, '更换供应商或 Base URL 时必须重新填写 API Key')
+                if not effective_key:
+                    # The name/base/model may be saved before the user enters a secret.
+                    # It remains NOT_CONFIGURED until a key is supplied.
+                    effective_key = ''
+                selected_social_provider = {
+                    'EASEL_AI_PROVIDER_NAME': name,
+                    'EASEL_AI_BASE_URL': base,
+                    'EASEL_AI_MODEL': model,
+                    'EASEL_AI_API_KEY': effective_key,
+                }
         # 同一条规矩也得覆盖 openclaw.json 这一侧：_sync_openclaw_chat 只在 key 非空时改
         # apiKey，却无条件改 baseUrl —— 只换地址、Key 留空，下一轮对话就会拿着原 Key 去打新地址。
         # 自定义供应商压根不写 .env，前面那道 _SLOT_ENV_KEYS 闸拦不到它。
@@ -1668,6 +1706,12 @@ async def api_settings_models_save(req: ModelSaveRequest):
         raise HTTPException(400, '没有可保存的改动（key 留空表示不改）')
     if updates:
         _write_env_direct(updates)
+    if selected_social_provider:
+        # _write_env_direct intentionally ignores empty values, so an existing key is
+        # retained when the field is left blank and a first-time empty key stays absent.
+        if not selected_social_provider['EASEL_AI_API_KEY']:
+            selected_social_provider.pop('EASEL_AI_API_KEY')
+        _write_env_direct(selected_social_provider)
     note = ''
     if is_chat:
         note = _sync_openclaw_chat(provider_updates, keep_custom, primary_ref)
@@ -1685,16 +1729,23 @@ async def api_models_selftest(req: SelftestRequest):
     """真自测：对已配置的 OpenAI 兼容通道发 GET {base}/models 并计耗时。"""
     channel = (req.channel or "all").strip()
     env = _read_env()
-    targets: list[tuple[str, str]] = []
+    targets: list[tuple[str, str, str, bool]] = []
     if channel in ("chat", "all"):
-        for base, key in ((env.get("ANTHROPIC_BASE_URL", ""), env.get("ANTHROPIC_API_KEY", "")),
-                          (env.get("OPENAI_BASE_URL", ""), env.get("OPENAI_API_KEY", "")),
-                          (env.get("EASEL_LLM_BASE_URL", ""), env.get("EASEL_LLM_API_KEY", ""))):
+        for base, key, model, compatible in (
+            (env.get("ANTHROPIC_BASE_URL", ""), env.get("ANTHROPIC_API_KEY", ""),
+             env.get("CLAUDE_MODEL", "claude-sonnet-4-6"), False),
+            (env.get("OPENAI_BASE_URL", ""), env.get("OPENAI_API_KEY", ""),
+             env.get("OPENAI_MODEL", "deepseek-chat"), True),
+            (env.get("EASEL_LLM_BASE_URL", ""), env.get("EASEL_LLM_API_KEY", ""),
+             env.get("CLAUDE_MODEL", "deepseek-chat"), True),
+            (env.get("EASEL_AI_BASE_URL", ""), env.get("EASEL_AI_API_KEY", ""),
+             env.get("EASEL_AI_MODEL", ""), True),
+        ):
             if base.strip() and key.strip():
-                targets.append((base.strip().rstrip("/"), key.strip()))
+                targets.append((base.strip().rstrip("/"), key.strip(), model.strip(), compatible))
     if channel in ("transcribe", "all") and (env.get("SILICONFLOW_API_KEY") or "").strip():
         targets.append(((env.get("SILICONFLOW_BASE_URL") or "https://api.siliconflow.cn/v1").strip().rstrip("/"),
-                        env["SILICONFLOW_API_KEY"].strip()))
+                        env["SILICONFLOW_API_KEY"].strip(), "SenseVoiceSmall", False))
 
     # 这里会把真实 API Key 当 Bearer 发出去，所以目标地址必须先过闸：
     # 合法 http(s)、且不指向本机/内网/云元数据；跳转也不跟（跟了等于绕过前面的判断）。
@@ -1704,7 +1755,7 @@ async def api_models_selftest(req: SelftestRequest):
 
     _opener = urllib.request.build_opener(_NoRedirect)
 
-    def _probe(base: str, key: str) -> dict:
+    def _probe(base: str, key: str, model: str, compatible: bool) -> dict:
         t0 = time.time()
         if not _valid_base_url(base):
             return {"baseUrl": base, "ok": False, "ms": 0, "detail": "Base URL 不合法，未发起请求"}
@@ -1712,14 +1763,32 @@ async def api_models_selftest(req: SelftestRequest):
             return {"baseUrl": base, "ok": False, "ms": 0,
                     "detail": "目标指向本机/内网地址，已拒绝（避免把 API Key 发给内网服务）"}
         try:
-            rq = urllib.request.Request(base + "/models", headers={"Authorization": f"Bearer {key}"})
+            if compatible:
+                if not model:
+                    return {"baseUrl": base, "ok": False, "ms": 0, "detail": "未填写模型名称"}
+                payload = json.dumps({
+                    "model": model, "temperature": 0, "max_tokens": 4,
+                    "messages": [{"role": "user", "content": "Reply with OK."}],
+                }).encode("utf-8")
+                rq = urllib.request.Request(
+                    base + "/chat/completions", data=payload,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    method="POST",
+                )
+            else:
+                rq = urllib.request.Request(base + "/models", headers={"Authorization": f"Bearer {key}"})
             with _opener.open(rq, timeout=15) as resp:
                 return {"baseUrl": base, "ok": resp.status == 200, "ms": int((time.time() - t0) * 1000)}
-        except Exception as e:  # noqa: BLE001
+        except urllib.error.HTTPError as e:
             return {"baseUrl": base, "ok": False, "ms": int((time.time() - t0) * 1000),
-                    "detail": f"{type(e).__name__}: {e}"[:140]}
+                    "detail": f"模型请求返回 HTTP {e.code}"}
+        except Exception as e:  # noqa: BLE001
+            # Do not surface request headers, response bodies, or credential-bearing URLs.
+            detail = "连接超时" if isinstance(e, TimeoutError) else "无法连接模型服务"
+            return {"baseUrl": base, "ok": False, "ms": int((time.time() - t0) * 1000),
+                    "detail": f"{detail}（{type(e).__name__}）"}
 
-    results = await asyncio.to_thread(lambda: [_probe(b, k) for b, k in targets])
+    results = await asyncio.to_thread(lambda: [_probe(b, k, m, compatible) for b, k, m, compatible in targets])
     return {"channel": channel, "results": results, "testedAt": int(time.time())}
 
 

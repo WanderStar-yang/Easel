@@ -481,6 +481,26 @@ export interface HistoricalPost {
   updated_at: string;
 }
 
+export interface ClassificationSuggestion {
+  value: string | string[];
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  reason?: string;
+}
+
+export interface HistoricalClassificationRow extends HistoricalPost {
+  metadata: Record<string, { value: unknown; source: 'IMPORT' | 'AI_CONFIRMED' | 'MANUAL_CONFIRMED'; confidence: string | null; confirmed_at: string | null }>;
+  suggestions: Record<string, ClassificationSuggestion>;
+  suggestion_status: 'SUGGESTED' | 'CONFIRMED' | null;
+  suggested_at: string | null;
+}
+
+export interface HistoricalClassificationProgress {
+  sample_size: number;
+  content_source: { classified_count: number; sample_size: number; coverage: number };
+  subjects: { classified_count: number; sample_size: number; coverage: number };
+  content_type: { classified_count: number; sample_size: number; coverage: number };
+}
+
 export interface HistoricalPostInput {
   publish_time?: string | null;
   publish_time_raw?: string | null;
@@ -670,6 +690,12 @@ export interface HistoricalRepairPreview {
   preview_truncated: boolean;
 }
 
+export interface AIRuntimeStatus {
+  state: 'AVAILABLE' | 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'ERROR';
+  provider: string | null;
+  detail?: string | null;
+}
+
 function operatorPostsPath(accountId: string): string {
   return `/api/operator/accounts/${encodeURIComponent(accountId)}/posts`;
 }
@@ -698,10 +724,37 @@ export function updateHistoricalPost(
 
 export function batchClassifyHistoricalPosts(
   accountId: string,
-  payload: { post_ids: string[]; content_source?: 'REAL' | 'AI' | 'MIXED'; content_type?: string; subjects?: string[] },
+  payload: { post_ids: string[]; content_source?: 'REAL' | 'AI' | 'MIXED' | 'UNKNOWN'; content_type?: string; subjects?: string[] },
 ): Promise<{ updated_count: number }> {
   return request<{ updated_count: number }>(`${operatorPostsPath(accountId)}/batch-classify`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+export function fetchHistoricalClassificationRows(accountId: string): Promise<{ items: HistoricalClassificationRow[] }> {
+  return request<{ items: HistoricalClassificationRow[] }>(`${operatorPostsPath(accountId)}/classification/rows`);
+}
+
+export function fetchHistoricalClassificationProgress(accountId: string): Promise<HistoricalClassificationProgress> {
+  return request<HistoricalClassificationProgress>(`${operatorPostsPath(accountId)}/classification/progress`);
+}
+
+export function fetchHistoricalClassificationRuntime(accountId: string): Promise<AIRuntimeStatus> {
+  return request<AIRuntimeStatus>(`${operatorPostsPath(accountId)}/classification/runtime`);
+}
+
+export function runHistoricalAIPreclassification(accountId: string): Promise<{
+  suggested_post_count: number; suggested_field_count: number; high_confidence_field_count: number;
+  failed_post_count: number;
+}> {
+  return request(`${operatorPostsPath(accountId)}/classification/ai-suggest`, { method: 'POST' });
+}
+
+export function acceptHistoricalClassificationSuggestions(accountId: string, payload: {
+  post_ids: string[]; fields: string[]; high_confidence_only?: boolean;
+}): Promise<{ updated_count: number; confirmed_field_count: number }> {
+  return request(`${operatorPostsPath(accountId)}/classification/suggestions/accept`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
 }
 

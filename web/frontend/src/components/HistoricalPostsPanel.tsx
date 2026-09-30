@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  batchClassifyHistoricalPosts, confirmHistoricalImport, confirmHistoricalRepair, confirmOfficialExportSnapshot,
+  confirmHistoricalImport, confirmHistoricalRepair, confirmOfficialExportSnapshot,
   createHistoricalPost, deleteHistoricalPost, fetchHistoricalPosts, getHistoricalCompleteness,
   previewHistoricalImport, previewHistoricalRepair, updateHistoricalPost,
 } from '../lib/api';
 import type {
-  HistoricalCompleteness, HistoricalImportPreview, HistoricalRepairPreview,
+  HistoricalClassificationRow, HistoricalCompleteness, HistoricalImportPreview, HistoricalRepairPreview,
   HistoricalPost, HistoricalPostInput, OperatorAccount,
 } from '../lib/api';
+import HistoricalClassificationPanel from './HistoricalClassificationPanel';
 
 type FormState = Record<string, string>;
 
@@ -54,11 +55,10 @@ function formToPayload(form: FormState): HistoricalPostInput {
   };
 }
 
-export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis }: {
-  account: OperatorAccount; onClose: () => void; onRunDiagnosis?: () => void;
+export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis, onOpenSettings }: {
+  account: OperatorAccount; onClose: () => void; onRunDiagnosis?: () => void; onOpenSettings: () => void;
 }) {
   const [posts, setPosts] = useState<HistoricalPost[]>([]);
-  const [postTotal, setPostTotal] = useState(0);
   const [completeness, setCompleteness] = useState<HistoricalCompleteness | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -73,8 +73,6 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
   const [importMessage, setImportMessage] = useState('');
   const [showOtherImport, setShowOtherImport] = useState(false);
   const [diagnosisStale, setDiagnosisStale] = useState(false);
-  const [selectedPostIds, setSelectedPostIds] = useState<string[]>([]);
-  const [classification, setClassification] = useState({ content_source: '', content_type: '', subjects: '' });
   const fileRef = useRef<HTMLInputElement>(null);
   const isDouyin = account.platform === 'douyin';
 
@@ -86,7 +84,6 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
         fetchHistoricalPosts(account.id), getHistoricalCompleteness(account.id),
       ]);
       setPosts(history.items);
-      setPostTotal(history.total);
       setCompleteness(dataQuality);
     } catch {
       setError('加载历史内容失败，请重试。');
@@ -163,23 +160,6 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
     finally { setImporting(false); }
   };
 
-  const applyClassification = async () => {
-    const payload: { post_ids: string[]; content_source?: 'REAL' | 'AI' | 'MIXED'; content_type?: string; subjects?: string[] } = {
-      post_ids: selectedPostIds,
-    };
-    if (classification.content_source) payload.content_source = classification.content_source as 'REAL' | 'AI' | 'MIXED';
-    if (classification.content_type) payload.content_type = classification.content_type;
-    if (classification.subjects) payload.subjects = classification.subjects.split(/[,，、;]/).map((item) => item.trim()).filter(Boolean);
-    if (Object.keys(payload).length === 1) { setError('请至少选择一项分类内容。'); return; }
-    setImporting(true); setError('');
-    try {
-      const result = await batchClassifyHistoricalPosts(account.id, payload);
-      setImportMessage(`已为 ${result.updated_count} 条作品保存分类；旧诊断已过期，请重新诊断。`);
-      setDiagnosisStale(true); setSelectedPostIds([]); await load();
-    } catch (err) { setError(err instanceof Error ? err.message : '批量分类失败'); }
-    finally { setImporting(false); }
-  };
-
   const extraFields = isDouyin
     ? ['duration', 'subjects', 'hook_type', 'views', 'likes', 'comments', 'favorites', 'shares', 'followers_gain']
     : ['views', 'likes', 'favorites', 'comments', 'shares', 'followers_gain', 'profile_visits', 'inquiries'];
@@ -223,35 +203,6 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
         完整度依据样本数量、发布时间、内容类型、播放/曝光和互动数据覆盖率计算。
         {Object.entries(completeness.coverage).map(([key, value]) => <span key={key} style={{ marginLeft: 10 }}>
           {FIELD_LABELS[key] || key} {Math.round(value * 100)}%</span>)}
-      </div>}
-      {posts.length > 0 && <div className="card" style={{ marginTop: 12, padding: 12 }}>
-        <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>快速分类历史作品</h3>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'end' }}>
-          <label className="field-label">真实拍摄 / AI 视频
-            <select className="field" value={classification.content_source} onChange={(event) => setClassification({ ...classification, content_source: event.target.value })}>
-              <option value="">不修改</option><option value="REAL">真实拍摄</option><option value="AI">AI 视频</option><option value="MIXED">混合制作</option>
-            </select>
-          </label>
-          <label className="field-label">内容类型
-            <select className="field" value={classification.content_type} onChange={(event) => setClassification({ ...classification, content_type: event.target.value })}>
-              <option value="">不修改</option>
-              {['单猫日常', '双猫互动', '双猫反差', '养猫经验', '搞笑', '其他'].map((item) => <option key={item}>{item}</option>)}
-            </select>
-          </label>
-          <label className="field-label">出镜主体
-            <select className="field" value={classification.subjects} onChange={(event) => setClassification({ ...classification, subjects: event.target.value })}>
-              <option value="">不修改</option><option value="缅因">缅因</option><option value="布偶">布偶</option>
-              <option value="缅因,布偶">双猫</option><option value="其他">其他</option>
-            </select>
-          </label>
-          <button className="btn btn-sm btn-primary" disabled={!selectedPostIds.length || importing} onClick={() => void applyClassification()}>
-            为 {selectedPostIds.length} 条作品保存分类
-          </button>
-          <button className="btn btn-sm" onClick={() => setSelectedPostIds(selectedPostIds.length === posts.length ? [] : posts.map((post) => post.id))}>
-            {selectedPostIds.length === posts.length ? '取消全选' : '全选当前作品'}
-          </button>
-        </div>
-        <div className="page-subtitle" style={{ marginTop: 6 }}>先选择下方作品卡片，再设置标签。留空的分类项保持原值。</div>
       </div>}
       {error && <div role="alert" style={{ color: 'var(--red)', fontSize: 13, marginTop: 12 }}>{error}</div>}
       {importMessage && <div role="status" className="card" style={{ padding: 10, marginTop: 12 }}>{importMessage}</div>}
@@ -359,28 +310,9 @@ export default function HistoricalPostsPanel({ account, onClose, onRunDiagnosis 
         <div className="card" style={{ marginTop: 14, padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>
           这个账号还没有历史作品。{isDouyin ? '请导入抖音创作者中心官方作品列表，或手动添加。' : '可以导入 CSV / XLSX 或手动添加。'}
         </div>
-      ) : <div className="accounts-grid" style={{ marginTop: 14 }}>
-        {posts.map((post) => <article key={post.id} className="card account-card">
-          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-            <input aria-label={`选择作品 ${post.title}`} type="checkbox" checked={selectedPostIds.includes(post.id)} onChange={(event) => setSelectedPostIds((current) => event.target.checked ? [...current, post.id] : current.filter((id) => id !== post.id))} />
-            <span className="account-card-name">{post.title}</span>
-            <span className="badge">{post.content_source === 'UNKNOWN' ? '暂未分类' : post.content_source === 'REAL' ? '真实拍摄' : post.content_source === 'AI' ? 'AI 视频' : '混合制作'}</span>
-          </label>
-          <div className="account-card-note" style={{ marginTop: 7 }}>
-            {post.publish_time?.slice(0, 10) || (post.publish_time_raw ? `${post.publish_time_raw}（未标准化）` : '未填写发布时间')}
-            {post.content_type ? ` · ${post.content_type}` : post.content_type_raw ? ` · ${post.content_type_raw}` : ''}
-          </div>
-          <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
-            播放/曝光 {post.views ?? '—'} · 赞 {post.likes ?? '—'} · 藏 {post.favorites ?? '—'} · 评 {post.comments ?? '—'}
-            {post.note && <div style={{ marginTop: 5 }}>{post.note}</div>}
-          </div>
-          <div style={{ display: 'flex', gap: 7, marginTop: 'auto', paddingTop: 10 }}>
-            <button className="btn btn-sm" onClick={() => openEdit(post)}>编辑</button>
-            <button className="btn btn-sm btn-ghost" onClick={() => void remove(post)}>删除</button>
-          </div>
-        </article>)}
-      </div>}
-      {postTotal > posts.length && <div className="page-subtitle" style={{ marginTop: 8 }}>当前展示 {posts.length} / {postTotal} 条作品。</div>}
+      ) : <HistoricalClassificationPanel account={account} onChanged={() => { setDiagnosisStale(true); void load(); }}
+        onEdit={(row: HistoricalClassificationRow) => openEdit(row)} onDelete={(row: HistoricalClassificationRow) => void remove(row)}
+        onOpenSettings={onOpenSettings} />}
 
       {form && <div className="overlay" onClick={() => setForm(null)}>
         <div className="modal" style={{ width: 620, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={(event) => event.stopPropagation()}>

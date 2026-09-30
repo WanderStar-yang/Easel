@@ -15,6 +15,9 @@ from easel.social_operator.historical import (
 )
 from easel.social_operator.historical_imports import MAX_IMPORT_BYTES, HistoricalImportManager
 from easel.social_operator.douyin_export import DouyinCreatorExportParser
+from easel.social_operator.classification import (
+    ClassificationUnavailable, HistoricalClassificationService,
+)
 from easel.social_operator.models import ContentSource
 from easel.social_operator.repository import AccountNotFoundError, OperatorAccountRepository
 from easel.social_operator.snapshot_reconciliation import SnapshotReconciliationManager
@@ -29,6 +32,7 @@ class HistoricalServices:
     posts: HistoricalPostService
     imports: HistoricalImportManager
     snapshots: SnapshotReconciliationManager | None = None
+    classification: HistoricalClassificationService | None = None
 
 
 @lru_cache(maxsize=1)
@@ -37,7 +41,8 @@ def get_historical_services() -> HistoricalServices:
     accounts = OperatorAccountService(repository)
     posts = HistoricalPostService(repository)
     return HistoricalServices(accounts, posts, HistoricalImportManager(posts, repository),
-                              SnapshotReconciliationManager(repository))
+                              SnapshotReconciliationManager(repository),
+                              HistoricalClassificationService(repository))
 
 
 class _PostModel(BaseModel):
@@ -101,11 +106,23 @@ class BatchClassify(BaseModel):
     subjects: list[str] | None = Field(default=None, max_length=10)
 
 
+class AcceptSuggestions(BaseModel):
+    post_ids: list[str] = Field(min_length=1, max_length=500)
+    fields: list[str] = Field(min_length=1, max_length=3)
+    high_confidence_only: bool = False
+
+
 def _account(services: HistoricalServices, account_id: str) -> None:
     try:
         services.accounts.get_account(account_id)
     except AccountNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Operator account not found") from exc
+
+
+def _classification(services: HistoricalServices) -> HistoricalClassificationService:
+    if services.classification is None:
+        services.classification = HistoricalClassificationService(services.posts.repository)
+    return services.classification
 
 
 def _raise_post_error(exc: Exception) -> None:
@@ -136,6 +153,53 @@ def list_posts(
 def get_completeness(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
     _account(services, account_id)
     return services.posts.completeness(account_id)
+
+
+@router.get("/classification/progress")
+def classification_progress(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    return _classification(services).progress(account_id)
+
+
+@router.get("/classification/runtime")
+def classification_runtime(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    return _classification(services).runtime_status().as_dict()
+
+
+@router.get("/classification/rows")
+def classification_rows(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    return {"items": _classification(services).classification_rows(account_id)}
+
+
+@router.post("/classification/ai-suggest")
+def suggest_classifications(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    status = _classification(services).runtime_status()
+    if status.state.value == "NOT_CONFIGURED":
+        raise HTTPException(status_code=409, detail="尚未配置 AI 模型，请先完成模型设置。")
+    if status.state.value == "UNAVAILABLE":
+        raise HTTPException(status_code=503, detail="当前 AI 服务暂时不可用。")
+    if status.state.value == "ERROR":
+        raise HTTPException(status_code=502, detail="AI 模型配置或连接发生错误，请检查模型设置。")
+    try:
+        return _classification(services).suggest(account_id)
+    except ClassificationUnavailable as exc:
+        raise HTTPException(status_code=503, detail="当前 AI 服务暂时不可用。") from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="账号不存在") from exc
+
+
+@router.post("/classification/suggestions/accept")
+def accept_suggestions(account_id: str, payload: AcceptSuggestions,
+                       services: HistoricalServices = Depends(get_historical_services)):
+    _account(services, account_id)
+    try:
+        return _classification(services).accept(account_id, payload.post_ids, payload.fields,
+                                                high_confidence_only=payload.high_confidence_only)
+    except (LookupError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("", status_code=201)

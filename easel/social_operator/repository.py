@@ -12,6 +12,10 @@ from .canonical import clean_title
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = PROJECT_ROOT / "outputs" / "_social_operator.sqlite3"
+CONTENT_TYPE_LABELS = {
+    "单猫日常", "双猫互动", "双猫反差", "搞笑/趣味", "养猫经验", "情绪/陪伴", "AI创意", "其他",
+}
+SUBJECT_LABELS = {"缅因", "布偶", "双猫", "其他", "UNKNOWN"}
 
 
 def datetime_now_iso() -> str:
@@ -170,6 +174,27 @@ class OperatorAccountRepository:
                     ON account_baselines(account_id) WHERE status = 'ACTIVE';
                 CREATE INDEX IF NOT EXISTS idx_account_baselines_history
                     ON account_baselines(account_id, version DESC);
+                CREATE TABLE IF NOT EXISTS historical_post_classification_metadata (
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    post_id TEXT NOT NULL REFERENCES historical_posts(id) ON DELETE CASCADE,
+                    field TEXT NOT NULL CHECK (field IN ('content_source', 'subjects', 'content_type')),
+                    value_json TEXT NOT NULL DEFAULT 'null',
+                    source TEXT NOT NULL CHECK (source IN ('IMPORT', 'AI_CONFIRMED', 'MANUAL_CONFIRMED')),
+                    confidence TEXT CHECK (confidence IS NULL OR confidence IN ('HIGH', 'MEDIUM', 'LOW')),
+                    confirmed_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (post_id, field)
+                );
+                CREATE TABLE IF NOT EXISTS historical_post_classification_suggestions (
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    post_id TEXT NOT NULL REFERENCES historical_posts(id) ON DELETE CASCADE,
+                    suggestions_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'SUGGESTED' CHECK (status IN ('SUGGESTED', 'CONFIRMED')),
+                    generated_at TEXT NOT NULL,
+                    PRIMARY KEY (post_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_classification_suggestions_account
+                    ON historical_post_classification_suggestions(account_id, status, generated_at DESC);
                 CREATE TABLE IF NOT EXISTS historical_post_archive (
                     account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
                     post_id TEXT NOT NULL,
@@ -210,7 +235,56 @@ class OperatorAccountRepository:
                 conn.execute("ALTER TABLE account_diagnoses ADD COLUMN stale_at TEXT")
             if "stale_reason" not in diagnosis_columns:
                 conn.execute("ALTER TABLE account_diagnoses ADD COLUMN stale_reason TEXT")
-            conn.execute("PRAGMA user_version = 9")
+            classification_columns = {row["name"] for row in conn.execute(
+                "PRAGMA table_info(historical_post_classification_metadata)")}
+            if "value_json" not in classification_columns:
+                conn.execute("ALTER TABLE historical_post_classification_metadata "
+                             "ADD COLUMN value_json TEXT NOT NULL DEFAULT 'null'")
+            # Preserve known legacy classifications and their origin. Manual
+            # records are treated as user-confirmed; imported values remain
+            # traceable as imports and can be reviewed against V1 labels.
+            for field, column, predicate in (
+                ("content_source", "content_source", "content_source != 'UNKNOWN'"),
+                ("content_type", "content_type", "content_type IS NOT NULL AND TRIM(content_type) != ''"),
+                ("subjects", "subjects_json", "subjects_json != '[]'"),
+            ):
+                legacy_rows = conn.execute(
+                    f"SELECT account_id, id, {column} AS value, data_source, updated_at "
+                    f"FROM historical_posts WHERE {predicate}"
+                ).fetchall()
+                for row in legacy_rows:
+                    if field == "subjects":
+                        try:
+                            value = json.loads(row["value"] or "[]")
+                        except json.JSONDecodeError:
+                            value = []
+                    else:
+                        value = row["value"]
+                    origin = "MANUAL_CONFIRMED" if row["data_source"] == "MANUAL" else "IMPORT"
+                    conn.execute(
+                        "INSERT OR IGNORE INTO historical_post_classification_metadata "
+                        "(account_id, post_id, field, value_json, source, confidence, confirmed_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+                        (row["account_id"], row["id"], field, json.dumps(value, ensure_ascii=False), origin,
+                         row["updated_at"] if origin == "MANUAL_CONFIRMED" else None, row["updated_at"]),
+                    )
+            # Upgrade metadata created by an early Phase 4.5 schema before values were stored alongside origin.
+            stale_metadata = conn.execute(
+                "SELECT account_id, post_id, field FROM historical_post_classification_metadata "
+                "WHERE value_json = 'null'"
+            ).fetchall()
+            for row in stale_metadata:
+                value_row = conn.execute(
+                    f"SELECT {'subjects_json' if row['field'] == 'subjects' else row['field']} AS value "
+                    "FROM historical_posts WHERE account_id = ? AND id = ?",
+                    (row["account_id"], row["post_id"]),
+                ).fetchone()
+                if value_row:
+                    value = json.loads(value_row["value"] or "[]") if row["field"] == "subjects" else value_row["value"]
+                    conn.execute("UPDATE historical_post_classification_metadata SET value_json = ? "
+                                 "WHERE account_id = ? AND post_id = ? AND field = ?",
+                                 (json.dumps(value, ensure_ascii=False), row["account_id"], row["post_id"], row["field"]))
+            conn.execute("PRAGMA user_version = 10")
 
     def seed_defaults(self, now: str) -> None:
         seeds = (
@@ -465,6 +539,19 @@ class OperatorAccountRepository:
                     f"VALUES ({', '.join('?' for _ in range(len(columns) + 3))})",
                     (post_id, *(stored.get(column) for column in columns), now, now),
                 )
+                origin = "MANUAL_CONFIRMED" if stored.get("data_source") == "MANUAL" else "IMPORT"
+                for field in ("content_source", "content_type", "subjects"):
+                    if field == "subjects":
+                        value = json.loads(stored.get("subjects_json") or "[]")
+                        present = bool(value)
+                    else:
+                        value = stored.get(field)
+                        present = value not in (None, "", "UNKNOWN")
+                    if present:
+                        self._set_classification_metadata(
+                            conn, stored["account_id"], post_id, field, origin, None,
+                            now if origin == "MANUAL_CONFIRMED" else None, now,
+                        )
                 inserted.append(post_id)
             if inserted:
                 for account_id in {values["account_id"] for post_id, values in posts if post_id in set(inserted)}:
@@ -666,6 +753,9 @@ class OperatorAccountRepository:
                 f"UPDATE historical_posts SET {', '.join(assignments)} WHERE account_id = ? AND id = ?",
                 params,
             )
+            for field in {"content_source", "content_type", "subjects"} & values.keys():
+                self._set_classification_metadata(conn, account_id, post_id, field,
+                                                  "MANUAL_CONFIRMED", None, now, now)
             self._mark_diagnoses_stale(conn, account_id, now, "historical_posts_changed")
         return self.get_post(account_id, post_id)
 
@@ -691,8 +781,157 @@ class OperatorAccountRepository:
                     f"UPDATE historical_posts SET {', '.join(assignments)}, updated_at = ? WHERE account_id = ? AND id = ?",
                     (*params, now, account_id, post_id),
                 )
+                for field in values:
+                    self._set_classification_metadata(conn, account_id, post_id, field,
+                                                      "MANUAL_CONFIRMED", None, now, now)
             self._mark_diagnoses_stale(conn, account_id, now, "historical_posts_classified")
         return len(post_ids)
+
+    @staticmethod
+    def _set_classification_metadata(conn: sqlite3.Connection, account_id: str, post_id: str, field: str,
+                                     source: str, confidence: str | None, confirmed_at: str | None,
+                                     updated_at: str) -> None:
+        column = {"content_source": "content_source", "subjects": "subjects_json", "content_type": "content_type"}[field]
+        value_row = conn.execute(f"SELECT {column} AS value FROM historical_posts WHERE account_id = ? AND id = ?",
+                                 (account_id, post_id)).fetchone()
+        raw_value = value_row["value"] if value_row else None
+        value = json.loads(raw_value or "[]") if field == "subjects" else raw_value
+        conn.execute(
+            "INSERT INTO historical_post_classification_metadata "
+            "(account_id, post_id, field, value_json, source, confidence, confirmed_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(post_id, field) DO UPDATE SET "
+            "account_id = excluded.account_id, value_json = excluded.value_json, source = excluded.source, confidence = excluded.confidence, "
+            "confirmed_at = excluded.confirmed_at, updated_at = excluded.updated_at",
+            (account_id, post_id, field, json.dumps(value, ensure_ascii=False), source, confidence, confirmed_at, updated_at),
+        )
+
+    def save_classification_suggestions(self, account_id: str, suggestions: dict[str, dict[str, Any]],
+                                        generated_at: str) -> int:
+        if not suggestions:
+            return 0
+        with self._connect() as conn:
+            post_ids = list(suggestions)
+            placeholders = ",".join("?" for _ in post_ids)
+            rows = conn.execute(
+                f"SELECT id FROM historical_posts WHERE account_id = ? AND id IN ({placeholders})",
+                (account_id, *post_ids),
+            ).fetchall()
+            if {row["id"] for row in rows} != set(post_ids):
+                raise LookupError("作品不属于当前账号或已不存在")
+            metadata = conn.execute(
+                f"SELECT post_id, field, source FROM historical_post_classification_metadata "
+                f"WHERE account_id = ? AND post_id IN ({placeholders})",
+                (account_id, *post_ids),
+            ).fetchall()
+            manual = {(row["post_id"], row["field"]) for row in metadata
+                      if row["source"] == "MANUAL_CONFIRMED"}
+            for post_id, fields in suggestions.items():
+                safe_fields = {field: item for field, item in fields.items()
+                               if (post_id, field) not in manual}
+                conn.execute(
+                    "INSERT INTO historical_post_classification_suggestions "
+                    "(account_id, post_id, suggestions_json, status, generated_at) VALUES (?, ?, ?, 'SUGGESTED', ?) "
+                    "ON CONFLICT(post_id) DO UPDATE SET account_id = excluded.account_id, "
+                    "suggestions_json = excluded.suggestions_json, status = 'SUGGESTED', generated_at = excluded.generated_at",
+                    (account_id, post_id, json.dumps(safe_fields, ensure_ascii=False, allow_nan=False), generated_at),
+                )
+        return len(suggestions)
+
+    def get_classification_overlay(self, account_id: str, post_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not post_ids:
+            return {}
+        placeholders = ",".join("?" for _ in post_ids)
+        with self._connect() as conn:
+            metadata = conn.execute(
+                f"SELECT post_id, field, value_json, source, confidence, confirmed_at FROM historical_post_classification_metadata "
+                f"WHERE account_id = ? AND post_id IN ({placeholders})", (account_id, *post_ids),
+            ).fetchall()
+            suggestions = conn.execute(
+                f"SELECT post_id, suggestions_json, status, generated_at FROM historical_post_classification_suggestions "
+                f"WHERE account_id = ? AND post_id IN ({placeholders})", (account_id, *post_ids),
+            ).fetchall()
+        result = {post_id: {"metadata": {}, "suggestions": {}, "suggestion_status": None,
+                            "suggested_at": None} for post_id in post_ids}
+        for row in metadata:
+            result[row["post_id"]]["metadata"][row["field"]] = {
+                "value": json.loads(row["value_json"]), "source": row["source"],
+                "confidence": row["confidence"], "confirmed_at": row["confirmed_at"]}
+        for row in suggestions:
+            result[row["post_id"]].update({
+                "suggestions": json.loads(row["suggestions_json"]),
+                "suggestion_status": row["status"], "suggested_at": row["generated_at"],
+            })
+        return result
+
+    def accept_classification_suggestions(self, account_id: str, post_ids: list[str], fields: list[str],
+                                          now: str, *, high_confidence_only: bool = False) -> dict[str, int]:
+        allowed = {"content_source", "subjects", "content_type"}
+        if not post_ids or not fields or set(fields) - allowed:
+            raise ValueError("请选择作品和分类字段")
+        columns = {"content_source": "content_source", "subjects": "subjects_json", "content_type": "content_type"}
+        accepted_posts: set[str] = set()
+        accepted_fields = 0
+        with self._connect() as conn:
+            placeholders = ",".join("?" for _ in post_ids)
+            posts = conn.execute(
+                f"SELECT id FROM historical_posts WHERE account_id = ? AND id IN ({placeholders})",
+                (account_id, *post_ids),
+            ).fetchall()
+            if {row["id"] for row in posts} != set(post_ids):
+                raise LookupError("作品不属于当前账号或已不存在")
+            for post_id in post_ids:
+                row = conn.execute(
+                    "SELECT suggestions_json FROM historical_post_classification_suggestions "
+                    "WHERE account_id = ? AND post_id = ? AND status = 'SUGGESTED'", (account_id, post_id),
+                ).fetchone()
+                if row is None:
+                    continue
+                suggestions = json.loads(row["suggestions_json"])
+                current_fields = dict(suggestions)
+                for field in fields:
+                    item = suggestions.get(field)
+                    if not isinstance(item, dict):
+                        continue
+                    if high_confidence_only and item.get("confidence") != "HIGH":
+                        continue
+                    metadata = conn.execute(
+                        "SELECT source FROM historical_post_classification_metadata "
+                        "WHERE account_id = ? AND post_id = ? AND field = ?", (account_id, post_id, field),
+                    ).fetchone()
+                    if metadata and metadata["source"] == "MANUAL_CONFIRMED":
+                        current_fields.pop(field, None)
+                        continue
+                    value = item.get("value")
+                    if field == "content_source":
+                        if value not in {"REAL", "AI", "MIXED"}:
+                            current_fields.pop(field, None)
+                            continue
+                    elif field == "content_type":
+                        if value not in CONTENT_TYPE_LABELS:
+                            current_fields.pop(field, None)
+                            continue
+                    elif field == "subjects":
+                        if value not in SUBJECT_LABELS:
+                            current_fields.pop(field, None)
+                            continue
+                        value = [value] if value != "UNKNOWN" else []
+                    encoded = json.dumps(value, ensure_ascii=False) if field == "subjects" else value
+                    conn.execute(f"UPDATE historical_posts SET {columns[field]} = ?, updated_at = ? "
+                                 "WHERE account_id = ? AND id = ?", (encoded, now, account_id, post_id))
+                    self._set_classification_metadata(conn, account_id, post_id, field, "AI_CONFIRMED",
+                                                      item.get("confidence"), now, now)
+                    current_fields.pop(field, None)
+                    accepted_posts.add(post_id)
+                    accepted_fields += 1
+                status = "SUGGESTED" if current_fields else "CONFIRMED"
+                conn.execute(
+                    "UPDATE historical_post_classification_suggestions SET suggestions_json = ?, status = ? "
+                    "WHERE account_id = ? AND post_id = ?",
+                    (json.dumps(current_fields, ensure_ascii=False), status, account_id, post_id),
+                )
+            if accepted_posts:
+                self._mark_diagnoses_stale(conn, account_id, now, "historical_posts_classified")
+        return {"updated_count": len(accepted_posts), "confirmed_field_count": accepted_fields}
 
     def delete_post(self, account_id: str, post_id: str) -> bool:
         with self._connect() as conn:

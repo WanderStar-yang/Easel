@@ -19,11 +19,16 @@ All notable changes to Easel are documented in this file.
 - Added versioned AccountBaseline snapshots with canonical-post medians, P25/P75, per-metric sample counts and coverage, classified segment baselines, stale tracking, explicit preview/confirmation, and a compare-to-baseline service/API.
 - Added a user-facing history baseline panel with sample/date/coverage preview, classification guidance, historical version access, and create/view/regenerate actions.
 - Established the current Douyin pet account's Baseline V1 from 82 canonical historical posts; its views median is 578.5 and engagement-rate median is 2.02%.
+- Added Phase 4.5 historical classification suggestions with editorial-text-only model input, per-field confidence and provenance, user-controlled acceptance, fixed V1 label sets, classification progress, and baseline-stale propagation.
+- Decoupled historical classification from OpenClaw through a shared AIService runtime that reuses Easel's configured compatible chat providers, reports model availability in the classification UI, preserves per-item failures, and retains manual batch classification when AI is unavailable.
+- Replaced the historical-post card selection flow with a batch-review table, classification filters, manual multi-select updates, selected suggestion acceptance, and counted confirmation for high-confidence bulk acceptance.
+- Connected custom OpenAI-compatible providers in the existing Chat settings directly to Social Operator's AIService through the local ignored `.env`, without requiring an OpenClaw profile; the first custom provider is selected by default when no provider is active.
 
 ### Fixed
 
 - Fixed diagnosis counts and Top/Low rankings consuming duplicate and stale scan rows; the user's current Douyin database was repaired from 284 raw rows to 82 active canonical posts, with 202 legacy scan rows archived.
 - Fixed creator-center action text leaking into legacy titles and “unknown” Hook/source/duration values being presented as observed content facts.
+- Fixed custom model settings disappearing when no OpenClaw profile exists, made connection checks call the configured chat model, and exposed full connection errors on hover.
 
 ## [0.2.1] - 2026-09-24
 

@@ -476,6 +476,30 @@ Baseline 是后续判断新内容相对历史表现的比较基准。Phase 4 仅
 
 比“1000 播放算不算好”更有意义。
 
+## Phase 4.5 - Historical Content Enrichment
+
+Phase 4.5 位于 Account Baseline 与 Strategy Recommendation 之间。目标是通过 AI 文本预分类和用户批量确认补足分组 Baseline 所需的历史标签，不在本阶段生成策略、Content Pillars、选题或内容。
+
+首版只补三个分类字段：
+
+- 内容来源：`REAL`（真实拍摄）、`AI`（AI 生成）、`MIXED`（真人/AI 混合）、`UNKNOWN`（暂无法判断）。只凭标题无法可靠判断来源时必须是 `UNKNOWN`。
+- 出镜主体：缅因、布偶、双猫、其他、无法判断。明确出现缅因与布偶或“两只猫/双猫”才建议双猫；不从外观或账号假设推断品种。
+- 内容类型：单猫日常、双猫互动、双猫反差、搞笑/趣味、养猫经验、情绪/陪伴、AI创意、其他。使用固定 V1 分类，不临时扩展大量标签。
+
+AI Prompt 仅可使用作品标题、平台原始作品类型、已有标签和描述/备注。播放、点赞、评论、收藏、分享、互动率等表现数据不得进入分类 Prompt。模型按字段返回 `value`、`confidence`（HIGH/MEDIUM/LOW）和可选的简短 `reason`；无法判断、无效值或结构错误均保守回退为 `UNKNOWN/LOW`。Hook 继续保持“未分析”，不凭标题推断视频开头。
+
+AI 结果持久化为 `SUGGESTED`，不会自动写入作品最终标签。分类值仍由 HistoricalPost 保存；字段来源元数据保存当前值快照、来源（`IMPORT`、`AI_CONFIRMED`、`MANUAL_CONFIRMED`）、置信度和确认时间。人工确认优先，AI 不能覆盖人工确认的字段。
+
+历史作品页面提供批量表格、多选、三个字段的批量设置，以及“只看未分类 / 只看低置信度 / 只看 AI 建议”筛选。用户可以单独接受所选建议；“全部接受高置信度建议”必须先显示将确认的作品数和字段数，再由用户确认。分类进度按有效唯一作品分母分别展示内容来源、出镜主体、内容类型覆盖率。
+
+确认分类会使当前 Baseline stale。用户更新 Diagnosis 后显式重新生成新 Baseline 版本：Overall 统计仍直接计算 canonical unique HistoricalPost，维持 Phase 4 的中位数、样本数和覆盖率规则；内容分组样本 <3 不展示，3–4 只展示为初步数据，≥5 才允许 Phase 5 做正式比较。
+
+### Phase 4.5.1 - Model Provider / AI Classification Runtime
+
+历史分类只依赖 provider-neutral `AIService` 接口。分类业务层不得依赖具体模型厂商、OpenClaw CLI 或 Gateway 地址。运行时优先尝试 Easel 当前模型设置中已配置且可连接的 Provider；支持现有 OpenAI-compatible Chat Completions 与 Anthropic-compatible 消息端点，OpenClaw Gateway 作为可选回退通道。无模型、服务不可用和配置/响应错误须分别报告 `NOT_CONFIGURED`、`UNAVAILABLE`、`ERROR`；页面应提供打开现有模型设置的入口，手动批量分类始终可用。
+
+预分类按每批最多 20 条调用。发送内容限定为作品 ID、标题、原始作品类型、标签和描述，不发送任何表现指标。结构化响应逐条校验；单条缺失、重复、格式错误或标签越界只标记该作品失败，保留其它有效作品建议。Gateway 是 Easel Agent/聊天工作流的运行时依赖，但不是历史分类业务的唯一模型接入方式；Phase 4.5.1 不安装全局 OpenClaw，也不启用 Phase 5 能力。
+
 ---
 
 # 11. Account Diagnosis Report

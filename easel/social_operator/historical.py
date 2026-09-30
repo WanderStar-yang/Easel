@@ -9,7 +9,8 @@ from uuid import uuid4
 
 from .models import ContentSource, HistoricalPost, Platform
 from .data_sources import ManualInputAdapter
-from .repository import AccountNotFoundError, OperatorAccountRepository
+from .repository import (CONTENT_TYPE_LABELS, SUBJECT_LABELS, AccountNotFoundError,
+                         OperatorAccountRepository)
 from .canonical import canonical_unique_posts
 
 POST_FIELDS = (
@@ -256,6 +257,11 @@ class HistoricalPostService:
         filtered = {key: value for key, value in normalized.items() if key in allowed}
         if not filtered:
             raise InvalidHistoricalPostError({"classification": "至少设置一项分类"})
+        if "content_type" in filtered and filtered["content_type"] not in CONTENT_TYPE_LABELS:
+            raise InvalidHistoricalPostError({"content_type": "请选择支持的内容类型"})
+        if "subjects" in filtered and any(value not in SUBJECT_LABELS - {"UNKNOWN"}
+                                           for value in filtered["subjects"]):
+            raise InvalidHistoricalPostError({"subjects": "请选择支持的出镜主体标签"})
         return self.repository.classify_posts(account_id, post_ids, filtered, self._now())
 
     def completeness(self, account_id: str) -> dict:

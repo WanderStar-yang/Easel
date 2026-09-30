@@ -441,6 +441,64 @@ V1 抖音历史数据以 PC 端抖音创作者中心官方导出的作品列表 
 
 ---
 
+# 9.5. Phase 4.5 - Historical Content Enrichment
+
+## 目标与边界
+
+在 Phase 4 与 Phase 5 之间，以 AI 文本建议和用户批量确认补充历史作品分类。只处理内容来源、出镜主体和内容类型；不生成 Hook、策略、Content Pillars 或选题。
+
+## 分类取值
+
+- 内容来源：REAL、AI、MIXED、UNKNOWN；用户端显示真实拍摄、AI 生成、真人/AI 混合、暂无法判断。文本证据不足必须 UNKNOWN。
+- 出镜主体：缅因、布偶、双猫、其他、UNKNOWN；无法从标题/已有文本可靠判断时 UNKNOWN。
+- 内容类型：单猫日常、双猫互动、双猫反差、搞笑/趣味、养猫经验、情绪/陪伴、AI创意、其他；不扩展 V1 标签集合。
+- Hook 保持未分析状态。
+
+## AI 与标签来源
+
+- Prompt 只接收 title、source_content_type、已有 tags 和 description/note；不得传入任何播放或互动表现指标。
+- 输出每字段结构化 `{value, confidence, reason?}`；置信度 HIGH/MEDIUM/LOW。值缺失、无效、模型输出不完整或证据不足时回退 UNKNOWN/LOW。
+- AI 结果独立保存为 SUGGESTED，不改写历史作品字段。人工确认优先；保存来源 IMPORT / AI_CONFIRMED / MANUAL_CONFIRMED、当前值、字段置信度与确认时间。
+- 提供 AI 建议、未分类、低置信度过滤，所选建议接受和有计数预览的“全部接受高置信度建议”。
+
+## 批量审核和 Baseline
+
+- 历史页以表格批量显示标题、播放、三个当前分类、AI 建议和置信度；支持多选并批量设置三个固定字段。
+- 分类完成度按有效 canonical unique posts 分母分别统计。
+- 用户确认分类后使旧 Diagnosis 和 ACTIVE Baseline stale；Diagnosis 更新后，用户重新预览并生成 Baseline V2。整体指标仍使用原有 Phase 4 统计方式；分组样本 <3 不展示，3–4 只作为初步数据，≥5 才可供 Phase 5 正式比较。
+
+## 验收
+
+- 自动测试覆盖模型结构与 UNKNOWN 回退、置信度、人工覆盖 AI、批量设置与过滤数据、全部接受高置信度、账号隔离、覆盖率、Baseline stale/V2/分组门槛、Phase 4 整体 Median 回归。
+- 先在真实 Easel UI 配置 OpenAI-compatible Provider，并通过实际 Chat Completion 连通性测试；若失败，记录完整 HTTP 状态和原因，在连通前不发送历史作品分类请求。
+- 使用当前 82 条抖音作品抽查至少 20 条 AI 建议，统计完全正确、部分正确、明显错误、无法判断；若明显错误率不可接受，优化保守 Prompt 后重抽样。
+- 抽样达到可接受水平后以每批不超过 20 条处理剩余作品；逐项人工修正并确认，分别记录内容来源、主体、内容类型的 AI 建议数、人工确认数与 UNKNOWN 数。
+- 确认 V1 Baseline stale 后，更新 Diagnosis 并显式重新生成 V2；确认 Overall Median 与 V1 基本一致，记录 REAL/AI、缅因/布偶/双猫和 Content Type 分组数据及样本门槛。
+- 完成后停止，不开始 Phase 5。
+
+---
+
+# 9.6. Phase 4.5.1 - Model Provider / AI Classification Runtime Fix
+
+## 目标与边界
+
+修复 Phase 4.5 历史作品预分类的模型调用链；仅解决 AI Runtime、Provider 解耦、运行状态提示、批次隔离与结构化逐条解析。禁止开始 Phase 5，不安装全局 OpenClaw。
+
+## Provider 与调用约定
+
+- 分类只依赖 `AIService` 抽象；集中解析现有 Easel 模型配置并按可用 Provider 调用，不在分类业务中硬编码厂商名称或 Gateway URL。
+- 复用当前 `.env` 模型槽位、设置面板和仓库已有 `httpx` 依赖；不增加独立 AI SDK。兼容 Chat Completions 与当前 Anthropic-compatible 配置；OpenClaw Gateway 仅作为可选回退。
+- UI runtime 状态为 AVAILABLE / NOT_CONFIGURED / UNAVAILABLE / ERROR，并提供模型设置入口；AI 不可用时手动分类仍可用。
+- 每批最多 20 条；输入仅包含作品 ID、标题、原始作品类型、标签和描述。逐条校验结构，失败作品独立记数、其它有效响应保留。
+
+## 验收
+
+- 测试 Provider 配置/可用状态、OpenClaw 缺失时的兼容模型调用、无配置提示、白名单输入、20 条批次限制、单条解析失败和跨批次继续。
+- 真实 UI 确认普通用户可看到 AI 模型状态，并能从分类页打开现有模型设置；只有真实 Provider 显示 AVAILABLE 才执行真实 AI 分类验收。
+- 记录真实账号 Provider 状态。Phase 4.5.1 完成后停止，等待用户确认后再进入 Phase 5。
+
+---
+
 # 10. Phase 5 - Strategy Recommendation
 
 ## 目标

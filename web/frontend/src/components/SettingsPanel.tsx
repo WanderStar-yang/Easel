@@ -251,9 +251,11 @@ export default function SettingsPanel({ onClose }: Props) {
     result: localReady ? '✓ 已就绪' : (tools.length ? '未装（去环境安装）' : '检测中…'),
   };
 
-  const resultText = (row: ModelRow): { text: string; cls: string } => {
+  const resultText = (row: ModelRow): { text: string; cls: string; title?: string } => {
     const st = row.baseUrl && row.baseUrl !== '—' ? selftest?.byBase[row.baseUrl] : undefined;
-    if (st) return st.ok ? { text: `✓ ${st.ms}ms`, cls: 'good' } : { text: `✗ ${(st.detail || '失败').slice(0, 42)}`, cls: 'bad' };
+    if (st) return st.ok
+      ? { text: `✓ ${st.ms}ms`, cls: 'good' }
+      : { text: `✗ ${(st.detail || '失败').slice(0, 42)}`, cls: 'bad', title: st.detail || '测试失败' };
     if (row.result.includes('已就绪') || row.result.includes('已配置')) return { text: row.result, cls: 'good' };
     if (row.result.includes('缺') || row.result.includes('未装')) return { text: row.result, cls: 'warn-text' };
     return { text: row.result, cls: '' };
@@ -270,7 +272,7 @@ export default function SettingsPanel({ onClose }: Props) {
   const addProvider = () => {
     setChatRows((rs) => [...rs, {
       slot: 'custom', order: 0, name: '', sub: '自定义', type: 'openai',
-      model: '', baseUrl: '', keyMasked: '', role: '备', result: '待保存',
+      model: '', baseUrl: '', keyMasked: '', role: rs.some((r) => r.slot && r.role === '主') ? '备' : '主', result: '待保存',
     }]);
   };
 
@@ -309,7 +311,7 @@ export default function SettingsPanel({ onClose }: Props) {
     modelLoading && rows.length === 0 ? (
       <div className="board"><div className="empty"><span className="spin" /> 正在读取配置…<span className="hint">（后台繁忙时可能稍慢，会自动重试）</span></div></div>
     ) : rows.length === 0 ? (
-      <div className="board"><div className="empty">还没有配置。<span className="hint">可在「环境安装」先补齐本地能力。</span></div></div>
+      <div className="board"><div className="empty">还没有配置。<span className="hint">{rows === chatRows ? '点击下方「添加供应商」配置 AI 模型。' : '可在「环境安装」先补齐本地能力。'}</span></div></div>
     ) : (
       <div className="board">
         <div className="prow head">
@@ -400,7 +402,7 @@ export default function SettingsPanel({ onClose }: Props) {
               ) : (
                 <span className={`tag ${r.role === '主' ? 'main' : 'backup'}`}>{r.role}</span>
               )}
-              <span className={`stt ${rt.cls}`}>{rt.text}</span>
+              <span className={`stt ${rt.cls}`} title={rt.title || rt.text}>{rt.text}</span>
               {isCustom && ops?.onRemove ? (
                 <button className="row-del" onClick={() => ops.onRemove?.(i)} title="删除该供应商">✕</button>
               ) : ops?.media && r.slot ? (
@@ -478,15 +480,15 @@ export default function SettingsPanel({ onClose }: Props) {
                 {chan === 'chat' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <span className={`pill ${chatOk ? 'ok' : 'off'}`}><span className="dot" />{chatOk ? '主通道在线' : '未配置'}</span>
-                      <span className="desc">经本地网关路由（主备自动降级）</span>
+                      <span className={`pill ${chatOk ? 'ok' : 'off'}`}><span className="dot" />AI模型：{chatOk ? '已配置' : '未配置'}</span>
+                      {chatRows[0]?.model && <span className="desc">模型名称：{chatRows[0].model}</span>}
                       {selftest && <span className="desc">上次自测 {hhmm(selftest.testedAt)}</span>}
                       <span className="spacer" />
-                      <button className="btn btn-sm" onClick={() => void doSelftest('chat')} disabled={testing}>自测本通道</button>
+                      <button className="btn btn-sm" onClick={() => void doSelftest('chat')} disabled={testing}>{testing ? '测试中…' : '测试连接'}</button>
                     </div>
                     {renderBoard(chatRows, { onRow: (i, p) => updateRow(setChatRows, i, p), onPrimary: setPrimaryRow, onRemove: removeRow })}
                     <div className="add-row" onClick={addProvider}>＋ 添加供应商（填名称 / 模型 / Base URL / Key；点「设为主」切换生效通道）</div>
-                    <div className="foot-note">改完点右上角「保存配置」（key 留空=不改）；自动降级链随统一网关接入开放。</div>
+                    <div className="foot-note">填写供应商名称、模型名称、Base URL 和 API Key，保存后可测试实际模型调用。密钥仅保存在本机配置中。</div>
                   </section>
                 )}
 
