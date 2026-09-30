@@ -176,6 +176,30 @@ def test_accept_high_confidence_reports_post_and_field_counts(tmp_path):
     assert saved.subjects == []
 
 
+def test_classification_resumes_only_posts_without_complete_suggestions(tmp_path):
+    repo = make_repo(tmp_path)
+    posts = HistoricalPostService(repo)
+    posts.create_post("douyin-pet", {"title": "未分类作品 A"})
+    posts.create_post("douyin-pet", {"title": "未分类作品 B"})
+
+    class CountingClassifier:
+        def __init__(self):
+            self.calls = []
+
+        def classify_batch(self, rows):
+            self.calls.append(rows)
+            return [{"post_id": row["post_id"],
+                     "content_source": {"value": "UNKNOWN", "confidence": "LOW"},
+                     "subjects": {"value": "UNKNOWN", "confidence": "LOW"},
+                     "content_type": {"value": "UNKNOWN", "confidence": "LOW"}} for row in rows]
+
+    model = CountingClassifier()
+    service = HistoricalClassificationService(repo, model=model)
+    assert service.suggest("douyin-pet")["suggested_post_count"] == 2
+    assert service.suggest("douyin-pet")["suggested_post_count"] == 0
+    assert [len(batch) for batch in model.calls] == [2]
+
+
 def test_accepting_classifications_stales_baseline_and_regeneration_adds_segments(tmp_path):
     repo = make_repo(tmp_path)
     posts = HistoricalPostService(repo)
@@ -310,7 +334,7 @@ def test_invalid_batch_json_is_split_until_only_bad_item_fails():
     assert rows[0]["subjects"]["value"] == "布偶"
 
 
-def test_classification_batches_at_most_twenty_and_continue_after_batch_error(tmp_path):
+def test_classification_uses_small_batches_and_continues_after_batch_error(tmp_path):
     repo = make_repo(tmp_path)
     posts = HistoricalPostService(repo)
     for index in range(41):
@@ -331,9 +355,10 @@ def test_classification_batches_at_most_twenty_and_continue_after_batch_error(tm
 
     model = BatchModel()
     result = HistoricalClassificationService(repo, model=model).suggest("douyin-pet")
-    assert [len(batch) for batch in model.calls] == [20, 20, 1]
-    assert result["failed_post_count"] == 20
-    assert result["suggested_post_count"] == 21
+    assert [len(batch) for batch in model.calls] == [5, 5, 5, 5, 5, 5, 5, 5, 1]
+    assert all(len(batch) <= 5 for batch in model.calls)
+    assert result["failed_post_count"] == 5
+    assert result["suggested_post_count"] == 36
 
 
 def test_classification_api_progress_and_account_isolation(tmp_path):

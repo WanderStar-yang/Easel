@@ -782,6 +782,13 @@ def _ssrf_safe(u: str) -> bool:
     try:
         host = urllib.parse.urlparse(u).hostname or ''
         infos = socket.getaddrinfo(host, None)
+        try:
+            ipaddress.ip_address(host)
+            literal_address = True
+        except ValueError:
+            literal_address = False
+        proxies = urllib.request.getproxies()
+        proxy_available = bool(proxies.get(urllib.parse.urlparse(u).scheme) or proxies.get('all'))
     except Exception:  # noqa: BLE001  解析不了就当不安全
         return False
     for info in infos:
@@ -789,6 +796,8 @@ def _ssrf_safe(u: str) -> bool:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             return False
+        if ip in ipaddress.ip_network('198.18.0.0/15') and proxy_available and not literal_address:
+            continue
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
             return False
     return True
@@ -1753,7 +1762,8 @@ async def api_models_selftest(req: SelftestRequest):
         def redirect_request(self, *_a, **_kw):
             return None
 
-    _opener = urllib.request.build_opener(_NoRedirect)
+    _opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler(urllib.request.getproxies()), _NoRedirect())
 
     def _probe(base: str, key: str, model: str, compatible: bool) -> dict:
         t0 = time.time()

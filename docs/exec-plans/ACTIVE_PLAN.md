@@ -1,6 +1,6 @@
 # AI Social Operator V1 — Active Implementation Plan
 
-- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6、Phase 4 已完成；Phase 4.5/4.5.1 代码实现完成；真实模型连接、历史分类审核和 Baseline V2 验收进行中；未开始 Phase 5
+- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6、Phase 4、Phase 4.5/4.5.1 已完成真实账号验收；未开始 Phase 5
 - 更新日期：2026-09-30
 - 源码基线：Easel `main` at `0cab7ca6f6e8286635d25fe2435dda11a975ffec`
 - 本计划依据：`../../AGENTS.md`、`../product-specs/AI_SOCIAL_OPERATOR_V1.md`、`PLANS.md`、`../audits/EASEL_V1_SOURCE_AUDIT.md` 及当前仓库源码
@@ -359,3 +359,26 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 4. **人工审核与确认**：在真实页面过滤 AI 建议、低置信度和未分类作品，人工修正后确认；批量接受前检查界面显示的作品/字段数量。确认后核对 V1 Baseline 已变为 STALE。
 5. **Baseline V2**：按既有流程更新 Diagnosis 并显式预览、生成 V2。确认 sample_size 仍基于 82 条有效唯一作品、Overall Median 与 V1 基本一致；记录 REAL/AI、缅因/布偶/双猫和 content_type 分组，样本 <3 不展示，3–4 仅初步展示，≥5 标记可供后续比较。
 6. **收尾验收**：运行 Python tests、前端 build/lint、`git diff --check`；完成真实 UI 流程检查并更新本计划与 CHANGELOG。只汇报 Phase 4.5 是否满足进入 Phase 5 的条件，等待用户确认，不开始 Phase 5。
+
+## 17. Phase 4.5 真实验收完成记录
+
+### 模型调用与真实分类
+
+- Easel 设置页配置的 Qwen OpenAI-compatible Provider 在当前 VPN/系统代理网络下完成真实 Chat Completion 自测（约 2312 ms）；使用现有 AIService 与 `.env` 本地密钥，不安装 OpenClaw、不增加 AI SDK。历史分类调用成功，OpenClaw 不在该调用链上。
+- 从当前抖音账号 82 条 canonical unique HistoricalPost 随机抽查 20 条。标题证据复核为 19 条支持建议、1 条建议过度推断（部分正确），无结构化调用失败；收紧 Prompt 后该条已重新建议为 UNKNOWN。完整分类中又发现两条仅带 `#ai`/剪映的标题被猜成 AI 来源，收紧规则并重跑后改为 UNKNOWN/LOW。Prompt 现在要求明确的“AI生成/AI视频/AI创作”证据；两只猫互动也要求标题明确显示双猫和互动，证据不足保留 UNKNOWN。
+- 82 条均有每字段 AI 建议（共 246 条字段建议），逐批完成；失败的 5 条通过增量重试成功。模型仅接收作品 ID、标题、原始作品类型、标签和描述；请求不包含播放或互动指标。
+- 用户在真实 UI 确认高置信度建议：46 条作品、64 个字段。另人工确认标题明确提及“兄妹俩”和“抢你哥的”两条为双猫及双猫互动。最终 metadata：内容来源 AI_CONFIRMED 1；主体 AI_CONFIRMED 38、MANUAL_CONFIRMED 2；内容类型 AI_CONFIRMED 25、MANUAL_CONFIRMED 2。保守 UNKNOWN 建议分别为来源 81、主体 42、内容类型 19；其余中低置信度建议保留待后续人工审阅，没有强行确认。
+- 最终字段覆盖：来源 1/82（1%），主体 40/82（49%），内容类型 27/82（33%）。AI 来源目前只有 1 条明确作品，REAL/MIXED 无足够文本证据；没有生成虚假的来源 Segment Baseline。
+
+### Diagnosis 与 Baseline V2
+
+- 人工/AI 确认分类使 Diagnosis 与 Baseline V1 stale。经真实 UI 重新运行 Diagnosis 后状态为 CURRENT，再通过明确预览确认生成 Baseline V2；V1 保留为 STALE 历史版本，V2 为唯一 ACTIVE 版本。
+- V2 使用 82 条 canonical unique 作品，时间范围 2025-06-24～2026-09-28。Overall 与 V1 相同：播放中位数 578.5（P25 308/P75 988），点赞 8，评论 0.5，收藏 0，分享 1，互动率 2.02%（P25 1.27%/P75 2.87%）；各指标样本数、覆盖率保留。692,689 播放真实作品未剔除，Median 保持稳健。完播率、2 秒跳出率、平均播放时长均为 null/0 样本，因为当前官方 XLSX parser 没有可靠映射字段。
+- Segment Baseline：主体双猫 n=8（播放 median 625.5、互动率 2.34%）、布偶 n=15（742、1.78%）、缅因 n=16（977.5、2.29%）；内容类型单猫日常 n=11（486、1.78%）、搞笑/趣味 n=9（539、1.60%）可供未来正式比较，双猫互动 n=3（491、2.58%）与情绪/陪伴 n=3（780、3.94%）只作初步基准。其余标签样本不足不展示；REAL/AI 组不满足 n≥3。以上仅为历史表现，不代表因果或策略结论。
+
+### 验收与停点
+
+- 真实 UI 完成设置模型/连通、82 条批量预分类、查看建议、人工确认、覆盖进度、Baseline 预览确认、V2 与分组查看。页面显示普通用户可读的“账号历史基准”说明；未分类标签不显示 UNKNOWN 分组。
+- 最终 `.venv/bin/python -m pytest -q`：411 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning；前端 `npm run build` 通过；`npm run lint` 通过并保留两条既有 warning（linkifyOutputs.ts 无用转义、AccountsPage.tsx Hook 依赖）；`git diff --check` 通过。
+- 已用 SQLite online backup API 创建 `backups/social_operator_2026-09-30_phase4-5.sqlite3`，完整性检查为 `ok`；快照含 82 条活动唯一作品、202 条归档旧记录、82 条建议、确认分类元数据、V1 STALE 和 V2 ACTIVE。旧的同日快照保留为分类前状态。
+- Phase 4.5 闭环已通过；不自动开始 Phase 5，等待用户确认。

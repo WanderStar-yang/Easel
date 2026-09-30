@@ -6,7 +6,31 @@ import json
 import httpx
 from fastapi.testclient import TestClient
 
-from easel.ai_service import ConfiguredAIService
+from easel.ai_service import ConfiguredAIService, _safe_public_url, _system_proxy_for
+
+
+def test_fake_ip_dns_is_allowed_only_through_configured_proxy(monkeypatch):
+    info = (2, 1, 6, "", ("198.18.0.16", 443))
+    monkeypatch.setattr("easel.ai_service.socket.getaddrinfo", lambda *_args: [info])
+    monkeypatch.setattr("easel.ai_service.urllib.request.proxy_bypass", lambda _host: False)
+    monkeypatch.setattr("easel.ai_service.urllib.request.getproxies", lambda: {})
+    assert _safe_public_url("https://models.example/v1") is False
+
+    monkeypatch.setattr("easel.ai_service.urllib.request.getproxies",
+                        lambda: {"https": "http://127.0.0.1:1082"})
+    assert _safe_public_url("https://models.example/v1") is True
+    assert _safe_public_url("https://198.18.0.16/v1") is False
+    monkeypatch.setattr("easel.ai_service.urllib.request.proxy_bypass", lambda _host: True)
+    assert _safe_public_url("https://models.example/v1") is False
+
+
+def test_system_proxy_is_used_unless_the_host_bypasses_it(monkeypatch):
+    monkeypatch.setattr("easel.ai_service.urllib.request.getproxies",
+                        lambda: {"https": "http://127.0.0.1:1082"})
+    monkeypatch.setattr("easel.ai_service.urllib.request.proxy_bypass", lambda _host: False)
+    assert _system_proxy_for("https://models.example/v1") == "http://127.0.0.1:1082"
+    monkeypatch.setattr("easel.ai_service.urllib.request.proxy_bypass", lambda _host: True)
+    assert _system_proxy_for("https://models.example/v1") is None
 
 
 def test_selected_custom_provider_is_used_by_ai_service_without_gateway(monkeypatch):

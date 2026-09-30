@@ -11,6 +11,7 @@ import json
 import os
 import socket
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -22,6 +23,7 @@ import httpx
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _PLACEHOLDERS = ("replace_me", "your-api-key", "your_api_key", "xxx")
+_VPN_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
 class AIRuntimeState(str, Enum):
@@ -100,15 +102,36 @@ def _safe_public_url(url: str) -> bool:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             return False
+        try:
+            ipaddress.ip_address(parsed.hostname)
+            literal_address = True
+        except ValueError:
+            literal_address = False
+        proxy_available = bool(_system_proxy_for(url))
         infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
-        return bool(infos) and all(
-            not (ip := ipaddress.ip_address(info[4][0])).is_private
-            and not ip.is_loopback and not ip.is_link_local and not ip.is_reserved
-            and not ip.is_multicast
-            for info in infos
-        )
+        if not infos:
+            return False
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip in _VPN_FAKE_IP_NETWORK:
+                if proxy_available and not literal_address:
+                    continue
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        return True
     except (OSError, ValueError):
         return False
+
+
+def _system_proxy_for(url: str) -> str | None:
+    """Use the operating system's configured proxy for external model requests."""
+    scheme = urllib.parse.urlparse(url).scheme
+    proxies = urllib.request.getproxies()
+    proxy = proxies.get(scheme) or proxies.get("all")
+    host = urllib.parse.urlparse(url).hostname or ""
+    if proxy and urllib.request.proxy_bypass(host):
+        return None
+    return proxy
 
 
 def _strip_provider_prefix(model: str, provider: str) -> str:
@@ -217,7 +240,8 @@ class ConfiguredAIService:
             try:
                 headers = self._headers(provider)
                 response = httpx.get(provider.probe_url, headers=headers,
-                                     timeout=httpx.Timeout(5, connect=2), follow_redirects=False)
+                                     timeout=httpx.Timeout(5, connect=2), follow_redirects=False,
+                                     proxy=_system_proxy_for(provider.probe_url))
                 if response.status_code < 400:
                     return AIRuntimeStatus(AIRuntimeState.AVAILABLE, provider.label)
                 if response.status_code in (401, 403, 404, 405):
@@ -272,7 +296,8 @@ class ConfiguredAIService:
                     "messages": [{"role": "system", "content": system_prompt},
                                  {"role": "user", "content": user_prompt}]}
         response = httpx.post(provider.completion_url, headers=self._headers(provider), json=body,
-                              timeout=httpx.Timeout(self.timeout_seconds, connect=5), follow_redirects=False)
+                              timeout=httpx.Timeout(self.timeout_seconds, connect=5), follow_redirects=False,
+                              proxy=_system_proxy_for(provider.completion_url))
         if response.status_code >= 400:
             state = AIRuntimeState.ERROR if response.status_code in (401, 403, 400) else AIRuntimeState.UNAVAILABLE
             raise AIServiceError(state, f"模型服务返回 HTTP {response.status_code}")

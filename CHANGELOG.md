@@ -23,6 +23,7 @@ All notable changes to Easel are documented in this file.
 - Decoupled historical classification from OpenClaw through a shared AIService runtime that reuses Easel's configured compatible chat providers, reports model availability in the classification UI, preserves per-item failures, and retains manual batch classification when AI is unavailable.
 - Replaced the historical-post card selection flow with a batch-review table, classification filters, manual multi-select updates, selected suggestion acceptance, and counted confirmation for high-confidence bulk acceptance.
 - Connected custom OpenAI-compatible providers in the existing Chat settings directly to Social Operator's AIService through the local ignored `.env`, without requiring an OpenClaw profile; the first custom provider is selected by default when no provider is active.
+- Completed real Phase 4.5 acceptance for the Douyin account: Qwen classified all 82 canonical posts as suggestions, a sampled prompt issue was corrected conservatively, user-confirmed labels produced ACTIVE Baseline V2, and classified segments display sample-qualified medians while retaining V1 as stale history.
 
 ### Fixed
 

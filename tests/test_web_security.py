@@ -205,6 +205,17 @@ def test_ssrf_guard_rejects_internal(url):
     assert web._ssrf_safe(url) is False
 
 
+def test_ssrf_guard_allows_vpn_fake_ip_only_with_system_proxy(monkeypatch):
+    info = (2, 1, 6, "", ("198.18.0.16", 443))
+    monkeypatch.setattr(web.socket, "getaddrinfo", lambda *_args: [info])
+    monkeypatch.setattr(web.urllib.request, "getproxies", lambda: {})
+    assert web._ssrf_safe("https://models.example/v1") is False
+    monkeypatch.setattr(web.urllib.request, "getproxies",
+                        lambda: {"https": "http://127.0.0.1:1082"})
+    assert web._ssrf_safe("https://models.example/v1") is True
+    assert web._ssrf_safe("https://198.18.0.16/v1") is False
+
+
 def test_selftest_probe_has_guards():
     import inspect
     src = inspect.getsource(web.api_models_selftest)

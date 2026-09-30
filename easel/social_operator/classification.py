@@ -23,9 +23,9 @@ CLASSIFICATION_PROMPT = """你是历史作品标签建议器，只负责分类�
 你只能依据每条作品提供的标题、平台原始作品类型、已有标签和描述。输入中不包含表现数据；不得推断或讨论播放、点赞等表现。
 
 标签约束：
-- content_source 只能是 REAL、AI、MIXED、UNKNOWN。仅凭标题不能可靠判断是真拍还是 AI 时必须 UNKNOWN；明确写有 AI 生成/AI 视频可判 AI，明确写实拍/真人与 AI 混合可对应 REAL/MIXED。不要仅因内容看起来可爱或不寻常而猜来源。
+- content_source 只能是 REAL、AI、MIXED、UNKNOWN。仅凭标题不能可靠判断是真拍还是 AI 时必须 UNKNOWN；明确写有“AI生成”“AI视频”“AI创作”等来源证据才可判 AI，单独的 #AI / #ai 或“剪映”标签不够；明确写实拍/真人与 AI 混合可对应 REAL/MIXED。不要仅因内容看起来可爱或不寻常而猜来源。
 - subjects 只能是“缅因”“布偶”“双猫”“其他”“UNKNOWN”。标题/标签明确同时出现两猫、双猫或缅因与布偶时用“双猫”；明确单一品种用该品种。没有明确证据必须 UNKNOWN。不能由猫的外观推断品种。
-- content_type 只能是“单猫日常”“双猫互动”“双猫反差”“搞笑/趣味”“养猫经验”“情绪/陪伴”“AI创意”“其他”。只有文本线索足够明确才选具体类别，否则 UNKNOWN。
+- content_type 只能是“单猫日常”“双猫互动”“双猫反差”“搞笑/趣味”“养猫经验”“情绪/陪伴”“AI创意”“其他”。只有文本线索足够明确才选具体类别，否则 UNKNOWN。双猫互动必须同时有明确的两只猫主体和相互打闹、追逐、抢东西、依偎等互动动作；仅同时提到缅因和布偶、出现“玩不起”等模糊词不能推出互动。双猫反差必须明确描述两只猫的不同性格或相反行为。
 - 每个字段独立给 confidence：明确文本直接支持为 HIGH；文本强烈暗示但有推断为 MEDIUM；弱猜测或 UNKNOWN 为 LOW。不要为了覆盖率提高置信度。
 - reason 可空，最多 20 个汉字，只说明标签证据，不谈表现。
 
@@ -148,6 +148,10 @@ class AIServiceHistoricalClassifier:
 
 
 class HistoricalClassificationService:
+    # This provider takes close to a minute for five records; keep each request
+    # comfortably below the configured 60-second HTTP timeout.
+    BATCH_SIZE = 5
+
     def __init__(self, repository: OperatorAccountRepository | None = None, *,
                  model: ClassificationModel | None = None, ai_service: AIService | None = None) -> None:
         self.repository = repository or OperatorAccountRepository()
@@ -172,8 +176,11 @@ class HistoricalClassificationService:
         candidates = []
         for row in rows:
             metadata = overlay[row["id"]]["metadata"]
+            suggestions = overlay[row["id"]]["suggestions"]
             if all(metadata.get(field, {}).get("source") == "MANUAL_CONFIRMED"
                    for field in CLASSIFICATION_FIELDS):
+                continue
+            if all(field in suggestions for field in CLASSIFICATION_FIELDS):
                 continue
             # Intentionally whitelist editorial inputs. Never add performance metrics here.
             candidates.append({
@@ -185,8 +192,8 @@ class HistoricalClassificationService:
             })
         results: dict[str, dict] = {}
         failed_posts: set[str] = set()
-        for start in range(0, len(candidates), 20):
-            batch = candidates[start:start + 20]
+        for start in range(0, len(candidates), self.BATCH_SIZE):
+            batch = candidates[start:start + self.BATCH_SIZE]
             try:
                 items = self.model.classify_batch(batch)
             except Exception:  # a provider error affects this batch only
