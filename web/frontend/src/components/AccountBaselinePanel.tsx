@@ -20,6 +20,8 @@ const fmt = (value: number | null | undefined, metric = '') => {
   return metric === 'engagement_rate' ? `${rendered}%` : rendered;
 };
 const pct = (value: number | undefined) => `${Math.round((value || 0) * 100)}%`;
+const diff = (value: number | null | undefined) => typeof value === 'number'
+  ? `${value >= 0 ? '+' : ''}${Math.round(value * 100)}%` : '暂无可比较数据';
 const dateRange = (start: string | null, end: string | null) => `${start || '日期未提供'} ～ ${end || '日期未提供'}`;
 
 function Metrics({ metrics, showRange = false }: { metrics: Record<string, { median: number | null; p25: number | null; p75: number | null; sample_count: number; coverage: number }>; showRange?: boolean }) {
@@ -124,6 +126,7 @@ export default function AccountBaselinePanel({ account, onClose, onOpenHistory }
           {segment.groups.map((group) => <div key={group.key} style={{ padding: '8px 0', borderTop: '1px solid var(--border)' }}>
             <strong>{group.key}</strong> <span className="page-subtitle">样本：{group.sample_size} 条{group.eligible_for_comparison ? ' · 可供后续正式比较' : ' · 初步基准'}</span>
             <div className="page-subtitle" style={{ marginTop: 3 }}>播放中位数：{fmt(group.metrics.views?.median)} · 点赞：{fmt(group.metrics.likes?.median)} · 互动率：{fmt(group.metrics.engagement_rate?.median, 'engagement_rate')}</div>
+            <div className="page-subtitle" style={{ marginTop: 2 }}>相对整体：播放 {diff(group.baseline_difference?.views?.relative_change)} · 互动率 {diff(group.baseline_difference?.engagement_rate?.relative_change)}（描述性差异，不表示因果）</div>
           </div>)}
         </div>;
       })}

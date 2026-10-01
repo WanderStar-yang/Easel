@@ -661,7 +661,9 @@ export interface AccountBaseline {
   segments: Record<string, {
     coverage: number;
     classified_sample_count: number;
-    groups: Array<{ key: string; sample_size: number; metrics: Record<string, BaselineMetric>; eligible_for_comparison: boolean }>;
+    groups: Array<{ key: string; sample_size: number; metrics: Record<string, BaselineMetric>;
+      baseline_difference?: Record<string, { overall_median: number | null; segment_median: number | null; relative_change: number | null }>;
+      eligible_for_comparison: boolean }>;
     insufficient_group_count: number;
   }>;
   classification_coverage?: Record<string, number>;
@@ -672,6 +674,37 @@ export interface AccountBaselinePreview extends Omit<AccountBaseline, 'id' | 'ac
   metric_todo: string[];
   classification_coverage: Record<string, number>;
   content_type_coverage: number;
+}
+
+export interface StrategyRecommendation {
+  id: string; account_id: string; version: number; baseline_id: string | null;
+  baseline_version: number | null; diagnosis_id: string | null; generated_at: string;
+  status: 'CURRENT' | 'SUPERSEDED' | 'STALE';
+  recommendation: {
+    status: string; activation_status: 'NOT_ACTIVATED'; account_name: string; platform: string;
+    confidence: 'LOW' | 'MEDIUM' | 'HIGH'; confidence_note: string;
+    evidence_sufficiency?: { subjects_coverage: number; subjects_classified_count: number; unknown_count: number;
+      major_group_sample_sizes: Record<string, number>; major_groups_sufficient: boolean;
+      coverage_sufficient: boolean; unknown_bias_sufficient: boolean;
+      unknown_could_change_comparison: boolean; sufficient: boolean; note: string };
+    language_refinement: 'available' | 'fallback';
+    positioning_hypothesis: { summary: string; evidence_level: string; note: string };
+    audience_hypothesis: { summary: string; evidence_level: string; demographic_claims: string[]; note: string };
+    problem_observations: string[];
+    opportunity_directions: Array<{ evidence_id: string; group: string; dimension: string;
+      evidence_level: 'SUPPORTED' | 'EXPERIMENTAL'; sample_size: number }>;
+    evidence: Array<Record<string, unknown> & { baseline_difference?: {
+      views?: { relative_change?: number | null };
+      engagement_rate?: { relative_change?: number | null };
+    } }>;
+    pillars: Array<{ id: string; name: string; description: string; initial_test_allocation: number;
+      evidence_level: 'SUPPORTED' | 'EXPERIMENTAL' | 'INSUFFICIENT_DATA'; evidence_ids: string[];
+      goal: string; experiment_question: string; why?: string;
+      allocation_reason?: { summary?: string; [key: string]: unknown } }>;
+    experiment_horizon_weeks: number; experiment_note: string; limitations: string[];
+    source: { baseline_id: string | null; baseline_version: number | null; diagnosis_id: string | null;
+      historical_data_version: string | null; profile_summary: string; canonical_sample_size: number };
+  };
 }
 
 export interface HistoricalRepairPreview {
@@ -743,11 +776,14 @@ export function fetchHistoricalClassificationRuntime(accountId: string): Promise
   return request<AIRuntimeStatus>(`${operatorPostsPath(accountId)}/classification/runtime`);
 }
 
-export function runHistoricalAIPreclassification(accountId: string): Promise<{
+export function runHistoricalAIPreclassification(accountId: string, fields?: string[]): Promise<{
   suggested_post_count: number; suggested_field_count: number; high_confidence_field_count: number;
   failed_post_count: number;
 }> {
-  return request(`${operatorPostsPath(accountId)}/classification/ai-suggest`, { method: 'POST' });
+  return request(`${operatorPostsPath(accountId)}/classification/ai-suggest`, {
+    method: 'POST', ...(fields ? { headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }) } : {}),
+  });
 }
 
 export function acceptHistoricalClassificationSuggestions(accountId: string, payload: {
@@ -829,6 +865,18 @@ export function generateAccountBaseline(accountId: string, historicalDataVersion
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ historical_data_version: historicalDataVersion }),
   });
+}
+
+export function fetchStrategyRecommendation(accountId: string): Promise<StrategyRecommendation | null> {
+  return request<StrategyRecommendation | null>(`/api/operator/accounts/${encodeURIComponent(accountId)}/strategy-recommendations`);
+}
+
+export function fetchStrategyRecommendationHistory(accountId: string): Promise<StrategyRecommendation[]> {
+  return request<StrategyRecommendation[]>(`/api/operator/accounts/${encodeURIComponent(accountId)}/strategy-recommendations/history`);
+}
+
+export function generateStrategyRecommendation(accountId: string): Promise<StrategyRecommendation> {
+  return request<StrategyRecommendation>(`/api/operator/accounts/${encodeURIComponent(accountId)}/strategy-recommendations`, { method: 'POST' });
 }
 
 export interface AccountWhoami {

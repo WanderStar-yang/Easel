@@ -1,10 +1,10 @@
 # AI Social Operator V1 — Active Implementation Plan
 
-- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6、Phase 4、Phase 4.5/4.5.1 已完成真实账号验收；未开始 Phase 5
-- 更新日期：2026-09-30
+- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6、Phase 4、Phase 4.5/4.5.1、Phase 5、Phase 5.1、Phase 5.2 已完成；等待 Phase 5.2 验收确认，Phase 6 未开始
+- 更新日期：2026-10-01
 - 源码基线：Easel `main` at `0cab7ca6f6e8286635d25fe2435dda11a975ffec`
 - 本计划依据：`../../AGENTS.md`、`../product-specs/AI_SOCIAL_OPERATOR_V1.md`、`PLANS.md`、`../audits/EASEL_V1_SOURCE_AUDIT.md` 及当前仓库源码
-- 本轮边界：完成 Phase 4.5 Historical Content Enrichment 真实验收和 Provider 调用修复；不开始 Phase 5 Strategy Recommendation 或后续运营能力
+- 本轮边界：只执行 Phase 5.2 Subject Evidence Completion；不开始 Phase 6 Strategy Confirmation、Topic Engine、每日 3 选 1 或内容生成
 
 ## 1. 文档与路径核对
 
@@ -382,3 +382,70 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 - 最终 `.venv/bin/python -m pytest -q`：411 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning；前端 `npm run build` 通过；`npm run lint` 通过并保留两条既有 warning（linkifyOutputs.ts 无用转义、AccountsPage.tsx Hook 依赖）；`git diff --check` 通过。
 - 已用 SQLite online backup API 创建 `backups/social_operator_2026-09-30_phase4-5.sqlite3`，完整性检查为 `ok`；快照含 82 条活动唯一作品、202 条归档旧记录、82 条建议、确认分类元数据、V1 STALE 和 V2 ACTIVE。旧的同日快照保留为分类前状态。
 - Phase 4.5 闭环已通过；不自动开始 Phase 5，等待用户确认。
+
+## 18. Phase 5 执行记录：Strategy Recommendation
+
+### 本轮范围与实现
+
+- 本轮只完成 Strategy Recommendation；未实现策略确认、ACTIVE 策略切换、Topic Engine、每日 3 选 1、内容生成或 Weekly Review。
+- 新增 `strategy_recommendations` SQLite 表和 account-scoped latest/history/generate API。按账号递增版本，引用 Baseline、Diagnosis 与 Profile 快照；数据依据或 Profile 变动后 latest 会标记 STALE。生成新版本不覆盖旧记录。
+- `StrategyRecommendationService` 读取 AccountBaseline 服务提供的 ACTIVE canonical 唯一数据快照和当前 Diagnosis。Baseline / Diagnosis stale 时拒绝生成；没有历史作品的账号允许仅基于现有 Profile Hypothesis 生成 LOW 置信度假设。
+- 服务端计算证据组；样本 n≥5 为 SUPPORTED，n=3–4 为 EXPERIMENTAL，n<3 不纳入证据。空来源分组不展示；来源分类稀少不会阻止整体建议，但会将整体置信度压为 LOW。显示播放和互动率中位数及 P25/P75。
+- 内容 Pillar 说明、目标、实验问题、比例、证据等级和证据引用由确定性逻辑生成。已配置 Qwen3.7-Plus 通过现有 OpenAI-compatible `AIService` 实际完成文字整理调用；模型只允许润色短名称，禁止改变统计、比例、等级、实验内容或受众属性。调用失败或输出越界会退回本地确定性文案。
+- 账户页面增加定位/兴趣假设、数据限制、可验证分组、3 个或以上内容 Pillars、证据与历史版本面板。没有人口统计受众数据时只显示内容兴趣假设；不提供策略确认/启用按钮。
+
+### 当前真实账号结果与人工页面验收
+
+- 抖音宠物账号生成当前建议 V4，引用 ACTIVE Baseline V2 与当前 Diagnosis；规范样本 82 条，整体置信度 LOW（内容来源覆盖 1%、类型 33%、主体 49%）。三项 Pillars：猫咪日常与陪伴 40%、双猫共同生活与互动 30%、轻松趣味记录 30%，比例合计 100%。证据保持逐组门槛：主体双猫 n=8、布偶 n=15、缅因 n=16；单猫日常 n=11、搞笑/趣味 n=9 标记可用于正式比较；双猫互动 n=3 和情绪/陪伴 n=3 只显示为初步证据，不被混入 SUPPORTED Pillar 的正式证据引用；AI 来源 n=1 不显示分组。数据依据次序是 Segment、Diagnosis、Overall Baseline、Top/Low。
+- 小红书独立开发账号无历史作品 / Diagnosis / Baseline，生成当前建议 V3，仅有 Profile 假设：LOW 置信度、4 个实验 Pillars、各 20%–30% 分配合计 100%，没有引用历史指标或人口统计；空历史数据 hash 也纳入 stale 检查。
+- 两账号实际模型文字整理均成功，Provider 为 Qwen OpenAI-compatible / Qwen3.7-Plus；未调用 OpenClaw。模型输出的描述性/因果措辞风险曾在真实 UI 抽查中被发现，因此收紧为模型只改短名称，其余文案由确定性服务输出，并重新生成抖音 V4 与小红书 V3。两账号状态仍分别为 DIAGNOSING / NEW，原 `operator_strategies` 仍为 hypothesis。
+- 独立端口 7872 的真实 Easel UI 检查确认：业务账号列表出现“策略建议”；抖音显示 V4、82 条、LOW、定位/受众假设、数据限制、分组证据和实验分配；小红书显示 V3、0 条、无历史数据的 LOW 假设与四周实验说明。页面提示“不会自动启用”且无确认/激活动作。
+
+### 验证与停点
+
+- 新增 Phase 5 测试覆盖分组 n=3/n≥5 标签、来源 n=1 排除、MEDIAN 基准引用、比例合计、因果/越界输出回退、AI 不可用回退、stale 拦截、Profile stale、V1/V2 历史、账号隔离、显式 API 与重启持久化。
+- 全量 `.venv/bin/python -m pytest -q`：419 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning。前端 `npm run build` 通过；`npm run lint` 通过，保留两条既有 warning（`linkifyOutputs.ts` 无用转义、`AccountsPage.tsx` Hook 依赖）；`git diff --check` 通过。
+- Phase 5 已完成并停在策略建议。Phase 6 及后续 Topic/内容能力未开始，等待用户验收确认。
+
+## 19. Phase 5.1 执行记录：Strategy Evidence Strengthening
+
+### 当前范围
+
+- 本轮只补强 HistoricalPost 的 `subjects` / `content_type` 证据、更新 Diagnosis 与 Baseline、重新生成 Strategy Recommendation。内容来源 REAL/AI 不作为覆盖门槛；不生成 Phase 6 确认、Topic、每日 3 选 1 或内容。
+- 已修复 AI 重试候选条件：只请求当前仍未分类的字段，并允许指定字段；人工确认字段与已有分类不因重试创建冲突建议。策略质量门槛已改为主体/内容类型覆盖与正式 Segment 数量；来源稀疏时不生成 REAL/AI Segment 结论。
+- Baseline Segment 输出新增相对 Overall 中位数的描述性差异；策略 Pillar 保存确定性比例分数输入，并展示原因、数据引用和下一阶段验证问题。
+- 系统代理/VPN 合成 DNS 路由已修复，Easel 子进程沿用 macOS 系统代理；真实 Social Operator 页面 Runtime 显示 Qwen 可用。Qwen 仅收到作品编辑文本，不接收表现指标。
+- AI 对 43 条仍有未分类字段的作品返回 58 项建议，2 项 HIGH。对随机/分层 20 项建议抽样后，明确支持 16 项 UNKNOWN 判断、2 项部分支持、1 项分类证据不足、1 项无法判定；不因 HIGH 标签自动接受可疑的“单猫日常”。
+- 页面人工审核/批量确认后，主体 45/82（55%），内容类型 62/82（76%），来源 1/82（1%）。主体目标 75% 未达；标题/标签不能可靠确认其余作品具体品种或多猫关系，继续保留 UNKNOWN。内容类型目标 70% 达成。AI 建议计入最终覆盖前必须经 UI 确认。
+- 重新诊断后显式预览并建立 Baseline V3 ACTIVE：canonical sample 82，周期 2025-06-24～2026-09-28；播放中位数 578.5、点赞 8、评论 0.5、收藏 0、分享 1、互动率 2.02%，主要指标覆盖 100%。完播率、2 秒跳出率、平均播放时长当前官方导入结构没有可靠字段，保持 null。
+- Segment V3：缅因 n=17 / views median 975 / ER 2.27%（views +69%）；布偶 n=17 / 680 / 2.33%（+18%）；双猫 n=10 / 508 / 2.34%（-12%）。内容类型：单猫日常 n=22 / 620.5 / 2.24%（+7%）；双猫互动 n=3 / 491 / 2.58%（-15%，仅初步）；情绪/陪伴 n=7 / 742 / 3.79%（+28%）；搞笑/趣味 n=26 / 753 / 1.56%（+30%）。均为描述性差异，不解释为因果；除 n=3 组外，展示组满足 n≥5 正式比较门槛。
+- 真实页面生成 Strategy V5，引用 Diagnosis 与 Baseline V3；V4 保留为 STALE 历史版本。三项 Pillar 测试分配为日常陪伴 36%、双猫互动 31%、趣味记录 33%；比例由历史播放（30%）、互动（20%）、样本可靠度（20%）、账号目标（15%）、探索价值（15%）的确定性权重计算，并在页面展示原因、数据和四周验证问题。策略置信度为 LOW，未输出 REAL/AI 结论；主体分类覆盖不足是未通过 Phase 5.1 覆盖目标的原因。
+- 策略页面发现并修复过期推荐会禁用“重新生成建议”的 UI 阻断；V5 已通过真实 UI 生成。自动测试 424 passed、6 skipped；前端 build 通过；lint 通过并保留两条既有 warning；`git diff --check` 通过。
+
+### 当前验收状态
+
+- 全量 Python tests：424 passed、6 skipped；前端 build 通过；lint 通过并保留两条既有 warning；`git diff --check` 通过。真实 UI 已完成分类审核、Diagnosis 重跑、Baseline V3 预览/生成和 Strategy V5 生成。
+- 内容类型覆盖达到 76%，主体覆盖 55% 未达 75% 目标。基于标题的剩余 UNKNOWN 无法安全提升；策略质量门槛保持 LOW，而不是用猜测提高覆盖率。
+- Phase 5.1 工程与真实闭环已完成，但 Phase 6 前置数据证据目标未全部满足。Phase 6 及后续能力未开始，当前停在等待用户验收/授权状态。
+
+## 20. Phase 5.2 执行记录：Subject Evidence Completion
+
+### 分类复核
+
+- 本轮只对 82 条 canonical unique HistoricalPost 中 37 条主体未确认作品执行 subjects-only Qwen 建议；提示词与结构化输出仅包含主体，不请求内容来源、内容类型或 Hook。模型输入为作品编辑文本，不包含播放和互动指标。
+- 真实 UI 的“只看出镜主体未分类”筛选显示 37/82 条。建议结果为 36 条 UNKNOWN/LOW、1 条“其他”/HIGH；“其他”标题为程序员/厨艺内容，无法证明其为宠物主体或其它可分类对象，因此该建议未接受。没有任何新主体标签得到足够证据可安全确认；未执行人工批量改标，原 subjects 45/82（54.88%，页面取整 55%）不变，UNKNOWN 37 条。
+- 明确的猫咪泛称、普通日常标题、剪辑软件标签不能确定品种或同框猫只数量。文本中缺少账号既有名字到品种映射；无法判断的条目继续 UNKNOWN，没有为覆盖率强猜。内容来源和内容类型也未重新分类或更改。
+
+### Baseline V4 与 Strategy
+
+- 真实 UI 显式预览并生成 Baseline V4 ACTIVE，82 条唯一作品，周期 2025-06-24～2026-09-28。因为未有可安全确认的新主体，V4 的 Overall 与 V3 一致：播放 median 578.5（n=82）；点赞 8、评论 0.5、收藏 0、分享 1；互动率 median 2.02%（n=82）。Baseline V3 保留并转为 STALE；分类不足没有阻止 Overall Baseline 重算。
+- V4 主体 Segment：缅因 n=17，播放 median 975，互动率 median 2.27%，相对整体播放 +68.5%；布偶 n=17，680，2.33%，+17.5%；双猫 n=10，508，2.34%，-12.2%。比较样本不变，差异为描述性统计，不推断因果。
+- Strategy V6 曾在真实 UI 生成；人工验收发现 V6 的两条 Pillar 理由未正确对应其引用组样本/指标。修复确定性解释后，在同一范围和 Baseline V4 上重新生成 Strategy V7 CURRENT，V6 保留为 SUPERSEDED 历史版本。此为纠正展示证据关联的版本，不是进入新阶段。V7 比例为日常陪伴 36%、双猫互动 31%、趣味记录 33%，与 V5 分配相同；Pillar 理由现分别引用缅因 n=17 (975 views / 2.27% ER)、双猫 n=10 (508 / 2.34%) 和搞笑/趣味 n=26 (753 / 1.56%)，并保留下一阶段验证问题及分配因素。
+- 双猫互动解释显示其历史播放低于整体（508 vs 578.5），互动率高于整体（2.34% vs 2.02%）；仍保留 31% 作为账号双猫 IP 关系价值下的测试资源，而非因为播放历史最佳。明确说明这是待验证方向，不是因果结论。
+
+### 证据门槛、验收与停点
+
+- Strategy V7 Confidence 为 LOW。证据检查：subjects 覆盖 45/82（54.88%），缅因/布偶/双猫组各 n=17/17/10，三组均达到最低 n=5；但 UNKNOWN=37，超过最小主体组且占总样本 45.1%，可能改变主体间排序。coverage 与 UNKNOWN-bias 条件不满足，所以 LOW，页面提示“剩余未分类作品较多，主体间比较仍存在较大不确定性。”没有降低阈值、隐藏 UNKNOWN 或调高 Confidence。
+- 真实 UI 检查了 82 条账号样本、主体覆盖提示、37 条未确认过滤、AI suggestions 未自动确认、Baseline V4 Overall/segments、策略 Pillar 证据与比例、双猫低播放/高互动解释及 LOW 证据提示。未开始 Strategy Confirmation、Phase 6、Topic Engine、每日 3 选 1 或内容生成。
+- 全量 `.venv/bin/python -m pytest -q`：427 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning。Phase 5.2 定向分类/策略测试 29 passed；前端 `npm run build`、`npm run lint` 已通过（lint 保留两条既有 warning）；最终 `git diff --check` 通过。
+- Phase 5.2 工程与真实页面流程已完成，但主体证据充分性 Gate 未通过。当前不具备进入 Phase 6 的真实证据条件；停在本阶段，等待用户验收确认。

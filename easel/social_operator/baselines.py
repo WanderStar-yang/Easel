@@ -117,6 +117,7 @@ def _dimension_value(row: dict, dimension: str) -> list[str]:
 def _segments(rows: list[dict]) -> dict[str, dict[str, object]]:
     dimensions = ("content_source", "content_type", "subjects", "hook_type", "duration_bucket", "publish_period")
     output: dict[str, dict[str, object]] = {}
+    overall_metrics = _metric_values(rows)
     for dimension in dimensions:
         grouped: dict[str, list[dict]] = defaultdict(list)
         classified_posts: set[str] = set()
@@ -126,19 +127,33 @@ def _segments(rows: list[dict]) -> dict[str, dict[str, object]]:
                 classified_posts.add(row["id"])
                 for key in keys:
                     grouped[key].append(row)
+        groups = []
+        for key, group in sorted(grouped.items()):
+            if len(group) < MIN_GROUP_SAMPLE:
+                continue
+            metrics = _metric_values(group)
+            differences = {}
+            for metric in ("views", "engagement_rate"):
+                center = overall_metrics.get(metric, {}).get("median")
+                segment_center = metrics.get(metric, {}).get("median")
+                differences[metric] = {
+                    "overall_median": center,
+                    "segment_median": segment_center,
+                    "relative_change": ((segment_center / center) - 1
+                                        if isinstance(segment_center, (int, float))
+                                        and isinstance(center, (int, float)) and center != 0 else None),
+                }
+            groups.append({
+                "key": key,
+                "sample_size": len(group),
+                "metrics": metrics,
+                "baseline_difference": differences,
+                "eligible_for_comparison": len(group) >= FORMAL_COMPARISON_SAMPLE,
+            })
         output[dimension] = {
             "coverage": len(classified_posts) / len(rows) if rows else 0,
             "classified_sample_count": len(classified_posts),
-            "groups": [
-                {
-                    "key": key,
-                    "sample_size": len(group),
-                    "metrics": _metric_values(group),
-                    "eligible_for_comparison": len(group) >= FORMAL_COMPARISON_SAMPLE,
-                }
-                for key, group in sorted(grouped.items())
-                if len(group) >= MIN_GROUP_SAMPLE
-            ],
+            "groups": groups,
             "insufficient_group_count": sum(0 < len(group) < MIN_GROUP_SAMPLE for group in grouped.values()),
         }
     return output
@@ -172,6 +187,10 @@ class AccountBaselineService:
         source_dates = [row.get("source_updated_at") or row.get("updated_at") for row in rows]
         source_updated_at = max((value for value in source_dates if value), default=None)
         return rows, version, dates[0][:10] if dates else None, dates[-1][:10] if dates else None
+
+    def current_data_version(self, account_id: str) -> str:
+        """Return the canonical historical source hash without requiring a Baseline."""
+        return self._source(account_id)[1]
 
     def preview(self, account_id: str) -> dict[str, object]:
         rows, version, period_start, period_end = self._source(account_id)

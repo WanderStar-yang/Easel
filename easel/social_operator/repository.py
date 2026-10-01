@@ -174,6 +174,21 @@ class OperatorAccountRepository:
                     ON account_baselines(account_id) WHERE status = 'ACTIVE';
                 CREATE INDEX IF NOT EXISTS idx_account_baselines_history
                     ON account_baselines(account_id, version DESC);
+                CREATE TABLE IF NOT EXISTS strategy_recommendations (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    version INTEGER NOT NULL,
+                    baseline_id TEXT,
+                    baseline_version INTEGER,
+                    diagnosis_id TEXT,
+                    generated_at TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('CURRENT', 'SUPERSEDED', 'STALE')),
+                    evidence_data_version TEXT,
+                    recommendation_json TEXT NOT NULL,
+                    UNIQUE(account_id, version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_strategy_recommendations_history
+                    ON strategy_recommendations(account_id, version DESC);
                 CREATE TABLE IF NOT EXISTS historical_post_classification_metadata (
                     account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
                     post_id TEXT NOT NULL REFERENCES historical_posts(id) ON DELETE CASCADE,
@@ -1043,3 +1058,52 @@ class OperatorAccountRepository:
                  source_updated_at, historical_data_version, json.dumps(report, ensure_ascii=False, allow_nan=False)),
             )
         return self.get_latest_baseline(account_id) or {}
+
+    @staticmethod
+    def _strategy_recommendation(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["recommendation"] = json.loads(result.pop("recommendation_json"))
+        return result
+
+    def save_strategy_recommendation(self, recommendation_id: str, account_id: str, *,
+                                     baseline_id: str | None, baseline_version: int | None,
+                                     diagnosis_id: str | None, generated_at: str,
+                                     evidence_data_version: str | None,
+                                     recommendation: dict[str, Any]) -> dict[str, Any]:
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM operator_accounts WHERE id = ?", (account_id,)).fetchone() is None:
+                raise AccountNotFoundError(account_id)
+            conn.execute("UPDATE strategy_recommendations SET status = 'SUPERSEDED' "
+                         "WHERE account_id = ? AND status = 'CURRENT'", (account_id,))
+            version = int(conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS next_version "
+                "FROM strategy_recommendations WHERE account_id = ?", (account_id,),
+            ).fetchone()["next_version"])
+            conn.execute(
+                "INSERT INTO strategy_recommendations "
+                "(id, account_id, version, baseline_id, baseline_version, diagnosis_id, generated_at, "
+                "status, evidence_data_version, recommendation_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'CURRENT', ?, ?)",
+                (recommendation_id, account_id, version, baseline_id, baseline_version, diagnosis_id,
+                 generated_at, evidence_data_version,
+                 json.dumps(recommendation, ensure_ascii=False, allow_nan=False)),
+            )
+            row = conn.execute("SELECT * FROM strategy_recommendations WHERE id = ?", (recommendation_id,)).fetchone()
+        return self._strategy_recommendation(row)
+
+    def get_latest_strategy_recommendation(self, account_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM strategy_recommendations WHERE account_id = ? "
+                               "ORDER BY version DESC LIMIT 1", (account_id,)).fetchone()
+        return self._strategy_recommendation(row) if row else None
+
+    def list_strategy_recommendations(self, account_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM strategy_recommendations WHERE account_id = ? "
+                                "ORDER BY version DESC LIMIT ?", (account_id, limit)).fetchall()
+        return [self._strategy_recommendation(row) for row in rows]
+
+    def mark_strategy_recommendation_stale(self, recommendation_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE strategy_recommendations SET status = 'STALE' "
+                         "WHERE id = ? AND status = 'CURRENT'", (recommendation_id,))

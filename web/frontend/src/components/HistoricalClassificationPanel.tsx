@@ -13,7 +13,7 @@ const SOURCE_LABELS: Record<string, string> = { REAL: '真实拍摄', AI: 'AI生
 const TYPE_OPTIONS = ['单猫日常', '双猫互动', '双猫反差', '搞笑/趣味', '养猫经验', '情绪/陪伴', 'AI创意', '其他'];
 const SUBJECT_OPTIONS = ['缅因', '布偶', '双猫', '其他', 'UNKNOWN'];
 const CONFIDENCE_LABELS: Record<string, string> = { HIGH: '高', MEDIUM: '中', LOW: '低' };
-type ViewFilter = 'all' | 'unclassified' | 'low' | 'suggested';
+type ViewFilter = 'all' | 'unclassified' | 'subjects_unclassified' | 'low' | 'suggested';
 
 function textValue(value: unknown, field?: string): string {
   if (Array.isArray(value)) return value.map((item) => String(item)).join('、') || '—';
@@ -89,6 +89,7 @@ export default function HistoricalClassificationPanel({ account, onChanged, onEd
 
   const visibleRows = useMemo(() => rows.filter((row) => {
     if (filter === 'unclassified') return FIELDS.some((field) => !hasClassification(row, field));
+    if (filter === 'subjects_unclassified') return !hasClassification(row, 'subjects');
     if (filter === 'low') return hasLowConfidence(row);
     if (filter === 'suggested') return hasSuggestions(row);
     return true;
@@ -98,7 +99,8 @@ export default function HistoricalClassificationPanel({ account, onChanged, onEd
     const postIds: string[] = [];
     let fieldsCount = 0;
     for (const row of rows) {
-      const available = FIELDS.filter((field) => row.suggestions[field]?.confidence === 'HIGH'
+      // Phase 5.2 only accepts subject suggestions; do not change other fields.
+      const available = (['subjects'] as const).filter((field) => row.suggestions[field]?.confidence === 'HIGH'
         && row.metadata[field]?.source !== 'MANUAL_CONFIRMED');
       if (available.length) { postIds.push(row.id); fieldsCount += available.length; }
     }
@@ -122,13 +124,29 @@ export default function HistoricalClassificationPanel({ account, onChanged, onEd
         setError('AI 模型配置或连接发生错误，请检查模型设置。你仍可手动批量分类历史作品。');
         return;
       }
-      const result = await runHistoricalAIPreclassification(account.id);
-      setMessage(`AI 已提出 ${result.suggested_post_count} 条作品、${result.suggested_field_count} 项分类建议，其中 ${result.high_confidence_field_count} 项置信度高。${result.failed_post_count ? `${result.failed_post_count} 条未能解析，` : ''}所有建议仍需你确认。`);
+      const result = await runHistoricalAIPreclassification(account.id, ['subjects']);
+      setMessage(`主体专属 AI 预分类已处理：${result.suggested_post_count} 条作品、${result.suggested_field_count} 项主体建议，其中 ${result.high_confidence_field_count} 项置信度高。${result.failed_post_count ? `${result.failed_post_count} 条未能解析，` : ''}内容来源和内容类型未重新判断；所有建议仍需你确认。`);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'AI 预分类失败；请检查 Easel 模型网关后重试。');
     } finally { setBusy(false); }
   };
+
+  const quickSetSubject = async (value: string) => {
+    if (!selected.length) return;
+    if (!window.confirm(`将 ${selected.length} 条所选作品的出镜主体人工确认设为“${value}”，继续吗？`)) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await batchClassifyHistoricalPosts(account.id, { post_ids: selected, subjects: [value] });
+      setMessage(`已人工确认 ${result.updated_count} 条作品的出镜主体。历史基准已标记为需要更新。`);
+      setSelected([]); await load(); onChanged();
+    } catch (err) { setError(err instanceof Error ? err.message : '批量确认出镜主体失败'); }
+    finally { setBusy(false); }
+  };
+
+  const subjectsProgress = progress?.subjects;
+  const remainingTo75 = subjectsProgress
+    ? Math.max(0, Math.ceil(subjectsProgress.sample_size * 0.75) - subjectsProgress.classified_count) : null;
 
   const applyManual = async () => {
     const payload: { post_ids: string[]; content_source?: 'REAL' | 'AI' | 'MIXED' | 'UNKNOWN'; content_type?: string; subjects?: string[] } = { post_ids: selected };
@@ -147,12 +165,12 @@ export default function HistoricalClassificationPanel({ account, onChanged, onEd
     finally { setBusy(false); }
   };
 
-  const acceptSuggestions = async (postIds: string[], highOnly: boolean) => {
+  const acceptSuggestions = async (postIds: string[], highOnly: boolean, fields: readonly string[] = FIELDS) => {
     if (!postIds.length) return;
     setBusy(true); setError(''); setMessage('');
     try {
       const result = await acceptHistoricalClassificationSuggestions(account.id, {
-        post_ids: postIds, fields: [...FIELDS], high_confidence_only: highOnly,
+        post_ids: postIds, fields: [...fields], high_confidence_only: highOnly,
       });
       setMessage(`已确认 ${result.updated_count} 条作品中的 ${result.confirmed_field_count} 项 AI 建议。历史基准已标记为需要更新。`);
       setConfirmHigh(false); setSelected([]); await load(); onChanged();
@@ -167,6 +185,9 @@ export default function HistoricalClassificationPanel({ account, onChanged, onEd
 
   return <section aria-label="历史作品批量分类" style={{ marginTop: 14 }}>
     <Progress progress={progress} />
+    {subjectsProgress && <div className="page-subtitle" style={{ marginTop: 8 }}>
+      当前出镜主体覆盖：{Math.round(subjectsProgress.coverage * 100)}%；距离 75% 覆盖参考约还需确认 {remainingTo75} 条。此数字仅供整理进度参考，无法从文本可靠判断的作品应继续保留“无法判断”。
+    </div>}
     <div className="card" style={{ padding: 14, marginTop: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
         <div><h3 style={{ margin: 0, fontSize: 15 }}>历史作品批量分类</h3>
@@ -177,13 +198,13 @@ export default function HistoricalClassificationPanel({ account, onChanged, onEd
               : runtime?.state === 'ERROR' ? '发生错误' : runtime?.state === 'UNAVAILABLE' ? '暂时不可用' : '检查中…'}</span>
           {runtime?.state !== 'AVAILABLE' && <button className="btn btn-sm" onClick={onOpenSettings}>配置模型</button>}
           <button className="btn btn-sm btn-primary" onClick={() => void runAI()} disabled={busy || rows.length === 0 || !runtime}>
-          {busy ? '正在处理…' : 'AI预分类历史作品'}
+          {busy ? '正在处理…' : 'AI预分类未确认主体'}
           </button>
         </div>
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 12 }}>
-        {([['all', '全部作品'], ['unclassified', '只看未分类'], ['low', '只看低置信度'], ['suggested', '只看 AI 建议']] as const).map(([value, label]) =>
+        {([['all', '全部作品'], ['unclassified', '只看未分类'], ['subjects_unclassified', '只看出镜主体未分类'], ['low', '只看低置信度'], ['suggested', '只看 AI 建议']] as const).map(([value, label]) =>
           <button className={`btn btn-sm ${filter === value ? 'btn-primary' : ''}`} key={value} onClick={() => setFilter(value)}>{label}</button>)}
         <span className="badge">当前显示 {visibleRows.length} / {rows.length}</span>
       </div>
@@ -208,6 +229,10 @@ export default function HistoricalClassificationPanel({ account, onChanged, onEd
         <button className="btn btn-sm btn-primary" disabled={busy || !selected.length} onClick={() => void applyManual()}>
           确认所选 {selected.length} 条
         </button>
+        {SUBJECT_OPTIONS.filter((value) => value !== 'UNKNOWN').map((value) => <button className="btn btn-sm" key={`quick-${value}`}
+          disabled={busy || !selected.length} onClick={() => void quickSetSubject(value)}>
+          设为{value} ({selected.length})
+        </button>)}
         <button className="btn btn-sm" disabled={busy || !selectedSuggestions.length} onClick={() => void acceptSuggestions(selectedSuggestions, false)}>
           接受所选 AI 建议 ({selectedSuggestions.length})
         </button>
@@ -220,7 +245,7 @@ export default function HistoricalClassificationPanel({ account, onChanged, onEd
         {confirmHigh && <div role="alertdialog" aria-label="确认接受高置信度建议" className="card" style={{ padding: 10 }}>
           将确认 {highConfidence.postIds.length} 条作品中的 {highConfidence.fieldsCount} 项分类建议。
           <button className="btn btn-sm btn-primary" style={{ marginLeft: 8 }} disabled={busy}
-            onClick={() => void acceptSuggestions(highConfidence.postIds, true)}>确认接受</button>
+            onClick={() => void acceptSuggestions(highConfidence.postIds, true, ['subjects'])}>确认接受</button>
           <button className="btn btn-sm" style={{ marginLeft: 6 }} onClick={() => setConfirmHigh(false)}>取消</button>
         </div>}
       </div>

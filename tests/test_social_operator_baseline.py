@@ -141,6 +141,27 @@ def test_three_post_group_is_shown_but_not_formal_comparison(tmp_path):
     assert group["eligible_for_comparison"] is False
 
 
+def test_segment_reports_descriptive_difference_from_overall_medians(tmp_path):
+    repository = OperatorAccountRepository(tmp_path / "difference.sqlite3")
+    OperatorAccountService(repository)
+    posts = HistoricalPostService(repository)
+    for index, views in enumerate((100, 200, 300, 400, 1000, 1200)):
+        posts.create_post("douyin-pet", {
+            "title": f"分类作品 {index}", "content_type": "较高组" if index >= 3 else "较低组",
+            "views": views, "likes": 10,
+        })
+    AccountDiagnosisService(repository).diagnose("douyin-pet")
+    preview = AccountBaselineService(repository).preview("douyin-pet")
+    groups = {row["key"]: row for row in preview["segments"]["content_type"]["groups"]}
+    overall = preview["metrics"]["views"]["median"]
+    high = groups["较高组"]
+    assert high["baseline_difference"]["views"]["overall_median"] == overall
+    assert high["baseline_difference"]["views"]["segment_median"] == high["metrics"]["views"]["median"]
+    assert high["baseline_difference"]["views"]["relative_change"] == (
+        high["metrics"]["views"]["median"] / overall - 1
+    )
+
+
 def test_version_1_regenerate_version_2_keeps_history_and_only_one_active(tmp_path):
     repository, _, posts, _, service = setup_baseline(tmp_path, 5)
     v1 = service.generate("douyin-pet")

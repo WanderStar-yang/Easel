@@ -21,16 +21,44 @@ def test_fake_ip_dns_is_allowed_only_through_configured_proxy(monkeypatch):
     assert _safe_public_url("https://models.example/v1") is True
     assert _safe_public_url("https://198.18.0.16/v1") is False
     monkeypatch.setattr("easel.ai_service.urllib.request.proxy_bypass", lambda _host: True)
-    assert _safe_public_url("https://models.example/v1") is False
+    # If the host bypasses the proxy but DNS returns the VPN's synthetic IP,
+    # route through the configured proxy instead of making a broken direct call.
+    assert _safe_public_url("https://models.example/v1") is True
 
 
 def test_system_proxy_is_used_unless_the_host_bypasses_it(monkeypatch):
+    info = (2, 1, 6, "", ("93.184.216.34", 443))
+    monkeypatch.setattr("easel.ai_service.socket.getaddrinfo", lambda *_args: [info])
     monkeypatch.setattr("easel.ai_service.urllib.request.getproxies",
                         lambda: {"https": "http://127.0.0.1:1082"})
     monkeypatch.setattr("easel.ai_service.urllib.request.proxy_bypass", lambda _host: False)
     assert _system_proxy_for("https://models.example/v1") == "http://127.0.0.1:1082"
     monkeypatch.setattr("easel.ai_service.urllib.request.proxy_bypass", lambda _host: True)
     assert _system_proxy_for("https://models.example/v1") is None
+
+
+def test_vpn_fake_ip_destination_overrides_host_bypass_when_proxy_exists(monkeypatch):
+    info = (2, 1, 6, "", ("198.18.0.16", 443))
+    monkeypatch.setattr("easel.ai_service.socket.getaddrinfo", lambda *_args: [info])
+    monkeypatch.setattr("easel.ai_service.urllib.request.getproxies",
+                        lambda: {"https": "http://127.0.0.1:1082"})
+    monkeypatch.setattr("easel.ai_service.urllib.request.proxy_bypass", lambda _host: True)
+    assert _system_proxy_for("https://models.example/v1") == "http://127.0.0.1:1082"
+    assert _safe_public_url("https://models.example/v1") is True
+
+
+def test_web_child_preserves_system_proxy_when_easel_proxy_is_not_set(monkeypatch):
+    from easel.cli import _proxy_env
+
+    monkeypatch.setattr("easel.cli.urllib.request.getproxies", lambda: {
+        "http": "http://127.0.0.1:1082", "https": "http://127.0.0.1:1082",
+    })
+    monkeypatch.delenv("EASEL_PROXY", raising=False)
+    monkeypatch.delenv("http_proxy", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    env = _proxy_env()
+    assert env["http_proxy"] == "http://127.0.0.1:1082"
+    assert env["https_proxy"] == "http://127.0.0.1:1082"
 
 
 def test_selected_custom_provider_is_used_by_ai_service_without_gateway(monkeypatch):

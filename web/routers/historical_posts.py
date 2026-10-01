@@ -112,6 +112,10 @@ class AcceptSuggestions(BaseModel):
     high_confidence_only: bool = False
 
 
+class SuggestRequest(BaseModel):
+    fields: list[str] = Field(min_length=1, max_length=3)
+
+
 def _account(services: HistoricalServices, account_id: str) -> None:
     try:
         services.accounts.get_account(account_id)
@@ -174,7 +178,8 @@ def classification_rows(account_id: str, services: HistoricalServices = Depends(
 
 
 @router.post("/classification/ai-suggest")
-def suggest_classifications(account_id: str, services: HistoricalServices = Depends(get_historical_services)):
+def suggest_classifications(account_id: str, payload: SuggestRequest | None = None,
+                            services: HistoricalServices = Depends(get_historical_services)):
     _account(services, account_id)
     status = _classification(services).runtime_status()
     if status.state.value == "NOT_CONFIGURED":
@@ -184,7 +189,7 @@ def suggest_classifications(account_id: str, services: HistoricalServices = Depe
     if status.state.value == "ERROR":
         raise HTTPException(status_code=502, detail="AI 模型配置或连接发生错误，请检查模型设置。")
     try:
-        return _classification(services).suggest(account_id)
+        return _classification(services).suggest(account_id, payload.fields if payload else None)
     except ClassificationUnavailable as exc:
         raise HTTPException(status_code=503, detail="当前 AI 服务暂时不可用。") from exc
     except LookupError as exc:

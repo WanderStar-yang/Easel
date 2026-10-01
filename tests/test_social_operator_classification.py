@@ -176,7 +176,7 @@ def test_accept_high_confidence_reports_post_and_field_counts(tmp_path):
     assert saved.subjects == []
 
 
-def test_classification_resumes_only_posts_without_complete_suggestions(tmp_path):
+def test_classification_retries_unknown_fields_without_overwriting_confirmed_fields(tmp_path):
     repo = make_repo(tmp_path)
     posts = HistoricalPostService(repo)
     posts.create_post("douyin-pet", {"title": "未分类作品 A"})
@@ -196,8 +196,59 @@ def test_classification_resumes_only_posts_without_complete_suggestions(tmp_path
     model = CountingClassifier()
     service = HistoricalClassificationService(repo, model=model)
     assert service.suggest("douyin-pet")["suggested_post_count"] == 2
-    assert service.suggest("douyin-pet")["suggested_post_count"] == 0
-    assert [len(batch) for batch in model.calls] == [2]
+    # An UNKNOWN suggestion remains eligible for a new attempt.
+    assert service.suggest("douyin-pet")["suggested_post_count"] == 2
+    assert [len(batch) for batch in model.calls] == [2, 2]
+
+
+def test_retry_does_not_create_suggestions_for_previously_confirmed_fields(tmp_path):
+    repo = make_repo(tmp_path)
+    posts = HistoricalPostService(repo)
+    post = posts.create_post("douyin-pet", {"title": "布偶猫日常"})
+    posts.classify_posts("douyin-pet", [post.id], {"subjects": ["布偶"]})
+
+    class RetryClassifier:
+        def classify_batch(self, rows):
+            return [{"post_id": row["post_id"],
+                     "content_source": {"value": "AI", "confidence": "HIGH"},
+                     "subjects": {"value": "双猫", "confidence": "HIGH"},
+                     "content_type": {"value": "单猫日常", "confidence": "HIGH"}} for row in rows]
+
+    service = HistoricalClassificationService(repo, model=RetryClassifier())
+    service.suggest("douyin-pet")
+    row = service.classification_rows("douyin-pet")[0]
+    assert "subjects" not in row["suggestions"]
+    assert row["suggestions"]["content_type"]["value"] == "单猫日常"
+
+
+def test_suggestions_only_retry_requested_unclassified_fields(tmp_path):
+    repo = make_repo(tmp_path)
+    posts = HistoricalPostService(repo)
+    known = posts.create_post("douyin-pet", {
+        "title": "布偶猫日常", "subjects": ["布偶"], "content_type": "单猫日常",
+    })
+    unknown = posts.create_post("douyin-pet", {"title": "猫咪玩数据线"})
+
+    class TargetedClassifier:
+        def __init__(self): self.calls = []
+        def classify_batch(self, rows):
+            self.calls.extend(rows)
+            return [{"post_id": row["post_id"],
+                     "content_source": {"value": "REAL", "confidence": "HIGH"},
+                     "subjects": {"value": "UNKNOWN", "confidence": "LOW"},
+                     "content_type": {"value": "单猫日常", "confidence": "MEDIUM"}}
+                    for row in rows]
+
+    model = TargetedClassifier()
+    result = HistoricalClassificationService(repo, model=model).suggest(
+        "douyin-pet", fields=["content_type"],
+    )
+    rows_by_id = {row["id"]: row for row in HistoricalClassificationService(repo, model=model)
+                  .classification_rows("douyin-pet")}
+    assert result["suggested_post_count"] == 1
+    assert [row["post_id"] for row in model.calls] == [unknown.id]
+    assert set(rows_by_id[unknown.id]["suggestions"]) == {"content_type"}
+    assert rows_by_id[known.id]["suggestions"] == {}
 
 
 def test_accepting_classifications_stales_baseline_and_regeneration_adds_segments(tmp_path):
@@ -334,6 +385,24 @@ def test_invalid_batch_json_is_split_until_only_bad_item_fails():
     assert rows[0]["subjects"]["value"] == "布偶"
 
 
+def test_subject_only_classifier_requests_and_parses_only_subjects():
+    from easel.social_operator.classification import AIServiceHistoricalClassifier
+
+    class SubjectsOnlyAI:
+        def complete(self, system_prompt, user_prompt):
+            assert "只判断每条历史作品的出镜主体" in system_prompt
+            assert '"content_source":{"value"' not in system_prompt
+            assert '"content_type":{"value"' not in system_prompt
+            assert "views" not in user_prompt
+            return json.dumps({"classifications": [{"post_id": "p1",
+                "subjects": {"value": "UNKNOWN", "confidence": "LOW", "reason": "标题未说明"}}]}, ensure_ascii=False)
+
+    rows = AIServiceHistoricalClassifier(SubjectsOnlyAI()).classify_batch(
+        [{"post_id": "p1", "title": "小猫日常"}], ("subjects",))
+    assert rows == [{"post_id": "p1", "subjects": {
+        "value": "UNKNOWN", "confidence": "LOW", "reason": "标题未说明"}, "status": "OK"}]
+
+
 def test_classification_uses_small_batches_and_continues_after_batch_error(tmp_path):
     repo = make_repo(tmp_path)
     posts = HistoricalPostService(repo)
@@ -377,6 +446,12 @@ def test_classification_api_progress_and_account_isolation(tmp_path):
             assert len(rows.json()["items"]) == 1
             progress = client.get("/api/operator/accounts/douyin-pet/posts/classification/progress").json()
             assert progress["sample_size"] == 1 and progress["content_type"]["coverage"] == 0
+            suggested = client.post(
+                "/api/operator/accounts/douyin-pet/posts/classification/ai-suggest",
+                json={"fields": ["subjects"]},
+            )
+            assert suggested.status_code == 200
+            assert suggested.json()["suggested_field_count"] == 1
             accepted = client.post("/api/operator/accounts/douyin-pet/posts/classification/suggestions/accept", json={
                 "post_ids": [post.id], "fields": ["subjects"],
             })

@@ -14,6 +14,7 @@ import argparse
 import os
 import subprocess
 import sys
+import urllib.request
 import time
 from pathlib import Path
 
@@ -35,8 +36,10 @@ def _proxy_env() -> dict[str, str]:
     """返回带外网代理的环境变量（保护内网直连）。"""
     env = os.environ.copy()
     env.setdefault("EASEL_ROOT", str(PROJECT_ROOT))
-    env.setdefault("http_proxy", os.environ.get("EASEL_PROXY", ""))
-    env.setdefault("https_proxy", os.environ.get("EASEL_PROXY", ""))
+    system_proxies = urllib.request.getproxies()
+    configured_proxy = os.environ.get("EASEL_PROXY", "").strip()
+    env.setdefault("http_proxy", configured_proxy or system_proxies.get("http", ""))
+    env.setdefault("https_proxy", configured_proxy or system_proxies.get("https", ""))
     env.setdefault("no_proxy", "localhost,127.0.0.1,*.xiaohongshu.com,*.devops.xiaohongshu.com,10.*")
     return env
 

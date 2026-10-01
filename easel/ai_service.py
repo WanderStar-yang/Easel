@@ -130,7 +130,18 @@ def _system_proxy_for(url: str) -> str | None:
     proxy = proxies.get(scheme) or proxies.get("all")
     host = urllib.parse.urlparse(url).hostname or ""
     if proxy and urllib.request.proxy_bypass(host):
-        return None
+        # Some desktop VPN/proxy clients resolve tunneled external domains to
+        # RFC 2544 fake-IP space and also add the domain to macOS bypass rules.
+        # Directing such a request to that synthetic address fails before the
+        # configured provider can be reached. Keep ordinary bypass behavior,
+        # but route these fake-IP destinations through the configured proxy.
+        try:
+            addresses = {ipaddress.ip_address(info[4][0])
+                         for info in socket.getaddrinfo(host, None)}
+            if not any(address in _VPN_FAKE_IP_NETWORK for address in addresses):
+                return None
+        except (OSError, ValueError):
+            return None
     return proxy
 
 

@@ -513,6 +513,8 @@ V1 抖音历史数据以 PC 端抖音创作者中心官方导出的作品列表 
 
 根据 Diagnosis + Baseline 生成第一阶段运营建议。
 
+建议需要按账号保存版本，并把生成时引用的 Baseline/Diagnosis 版本作为证据快照。Baseline 或 Diagnosis stale 时不得沿用旧依据；无历史数据时只允许生成显式标记为 LOW 置信度的实验假设。
+
 ## 输出
 
 - 定位建议
@@ -522,6 +524,8 @@ V1 抖音历史数据以 PC 端抖音创作者中心官方导出的作品列表 
 - 主要问题
 - 机会方向
 - 第一阶段实验计划
+
+每个 Content Pillar 应包含名称、说明、初始测试资源比例、证据等级、来源证据、实验目标和四周实验问题。总比例为 100%，仅代表测试资源分配。整体统计、Segment 指标、样本数、覆盖率、阈值、证据等级和置信度由代码确定；模型只整理文字，模型不可用时必须有安全的确定性回退。
 
 ## 原则
 
@@ -533,7 +537,58 @@ AI 必须优先读取真实诊断结果。
 
 - 抖音与小红书分别生成不同建议
 - 推荐理由引用真实历史数据
+- 分组样本 n≥5 才标记 SUPPORTED，n=3–4 标记 EXPERIMENTAL，n<3 不展示
+- 不将历史相关性描述为因果；不补造受众人口统计
+- Pillar 测试比例合计 100%，建议版本可回溯
+- Baseline/Diagnosis 发生变化后旧建议标记 STALE
+- 未确认策略的账号状态保持原值，operator_strategies 不被激活或覆盖
 - 不直接自动激活 Strategy
+
+---
+
+# 10.5. Phase 5.1 - Strategy Evidence Strengthening
+
+## 目标
+
+补强真实历史作品中的主体和内容类型分类证据；重新生成 Baseline 与 Strategy Recommendation 版本。Phase 5.1 不进入 Phase 6。
+
+## 执行约束
+
+- 只针对 `subjects` / `content_type` 未分类作品重新请求 AI 建议；确认过的字段不得被重试覆盖。AI 仅看作品编辑文本，不接收 views / likes / comments 等表现数据。
+- 先抽样审核至少 20 条建议。置信度低时不得自动确认；只对文本明确支持的字段人工或按高置信度批量确认。UNKNOWN 允许保留。
+- 目标覆盖率：主体 ≥75%，内容类型 ≥70%。目标未达到时记录真实阻塞和剩余 UNKNOWN，不得猜测补齐。内容来源覆盖不构成阻塞，不生成 REAL vs AI 正式结论。
+- 分类确认后更新 Diagnosis，再显式预览并生成 Baseline V3；总体样本仍为 canonical unique HistoricalPost。旧 Baseline / Strategy 保留历史版本。
+- Segment n≥3 才展示，n=3–4 为初步描述，n≥5 才可正式比较。每组提供播放与互动率中位数及相对 Overall Baseline 的差异；不得解释为因果。
+- 基于最新 Baseline V3、Diagnosis 和分类数据显式生成新 Strategy Recommendation 版本。比例必须通过确定性规则综合历史表现、样本量、互动表现、账号目标和探索价值；显示每个 Pillar 的“为什么”、主要数据依据和下一阶段验证问题。
+- 如果分类质量门槛未满足，策略整体置信度必须为 LOW，并显示“历史内容分类仍不足，本策略主要作为测试方案”。不生成 Phase 6 确认、Topic Engine、每日 3 选 1 或内容。
+
+## 验收
+
+- 真实账号 UI 完成未知项建议、人工审核/确认、覆盖率、Diagnosis 更新、Baseline V3、分组差异和策略新版本。
+- 人工检查主要主体和内容类型分组、每个 Pillar 的实际数据、比例来源、REAL/AI 结论约束与 LOW 置信提示。
+- 运行 Python tests、前端 build/lint、`git diff --check`，并记录真实页面验收。完成后停在 Phase 5.1，单独等待 Phase 6 授权。
+
+### 真实账号验收记录（2026-09-30）
+
+- Qwen 实际返回 43 条作品的 58 项未分类字段建议。20 项抽样中，16 项 UNKNOWN 判断有文本依据，2 项部分支持，1 项正向分类证据不足，1 项无法判定；只通过 UI 人工确认明确有证据的建议。
+- 最终覆盖：subjects 45/82（55%，低于 75% 目标）；content_type 62/82（76%，达到 70% 目标）；content_source 1/82（不作为阻塞，也未生成 REAL/AI Segment 结论）。主体不覆盖的项继续 UNKNOWN。
+- Baseline V3 ACTIVE，82 条 canonical unique posts，播放 median 578.5；Diagnosis 重新生成后，真实页面重新生成 Strategy V5。V4 保留为 STALE。
+- 策略测试资源比例：日常陪伴 36%、双猫互动 31%、趣味记录 33%；每个 Pillar 展示数据依据、描述性差异、比例计算因素和四周验证问题。整体置信度 LOW，主体分类覆盖不足；未开始 Phase 6。
+- Python tests 424 passed / 6 skipped；前端 build 通过；lint 通过、2 条既有 warning；diff check 通过。
+
+---
+
+# 10.6. Phase 5.2 - Subject Evidence Completion
+
+## 目标与约束
+
+Phase 5.2 只补足出镜主体证据，不扩大内容来源、内容类型或 Hook 分类，不开始 Phase 6、Topic Engine、每日 3 选 1 或内容生成。
+
+- 为分类服务增加 subjects-only 输入/结构化输出；文本证据不足必须 UNKNOWN，“其他”需有明确的非已知主体证据。AI 仅生成建议，不更新/覆盖内容来源、内容类型或人工标签。
+- 历史分类 UI 增加主体未分类过滤、主体专属 AI 建议、多选快速设置缅因/布偶/双猫/其他，以及覆盖参考提示；批量接受只接受 subjects。
+- Strategy Evidence Gate 同时检查主体覆盖率、缅因/布偶/双猫每组至少 5 条、内容类型覆盖/正式分组和 UNKNOWN bias。UNKNOWN 若可能改变主要分组比较，Confidence 保持 LOW 并显示不确定性提示；不为提升置信度降低标准。
+- 确认 subjects 后重新诊断、建立下一版 Baseline、生成下一版 Strategy。Overall 与 Segment 统计从 canonical unique HistoricalPost 确定性计算；支柱说明须展示播放/互动表现、样本、证据等级、比例形成依据和下一阶段验证问题。双猫互动若播放低、互动高，须解释其作为账号 IP 相关实验方向的依据，不作因果推断。
+- 验收记录主体覆盖、UNKNOWN 数、主要主体表现、Baseline/Strategy 版本、比例与 Confidence、与上一版策略差异、自动测试和真实 UI。不能可靠判断的项目继续 UNKNOWN；完成后停下等待 Phase 6 的单独授权。
 
 ---
 
