@@ -58,6 +58,7 @@ class OperatorAccountService:
                                       strategy["state"], strategy["confirmed_at"]),
             created_at=row["created_at"], updated_at=row["updated_at"],
             diagnosis_completed_at=row["diagnosis_completed_at"],
+            active_strategy=row.get("active_strategy"),
         )
 
     def list_accounts(self) -> list[OperatorAccount]:

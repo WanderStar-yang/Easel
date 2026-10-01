@@ -33,6 +33,13 @@ Thumbs.db
 outputs/**/*
 !outputs/**/.gitkeep
 
+# Social Operator databases contain real account data; keep snapshots local.
+/backups/*.sqlite3
+/backups/*.sqlite
+/backups/*.db
+/backups/*.sqlite3-wal
+/backups/*.sqlite3-shm
+
 # Assets (user materials are not tracked; curated brand/README media is)
 assets/**/*
 !assets/**/.gitkeep

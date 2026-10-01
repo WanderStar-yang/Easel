@@ -594,320 +594,103 @@ Phase 5.2 只补足出镜主体证据，不扩大内容来源、内容类型或 
 
 # 11. Phase 6 - Strategy Confirmation
 
-## 目标
+## 目标与进入规则
 
-用户确认第一阶段运营策略。
+将用户确认的当前有效 Strategy Recommendation 转换为独立版本化的 ActiveStrategy 和 ACTIVE Content Pillars，并通过账号状态门禁正式激活业务账号。Strategy Confidence=LOW 不阻止进入第一阶段实验运营；LOW 必须留在页面和审计记录中，说明未来四周会继续验证。
 
-## 必须支持
+进入确认流程需满足：
 
-- 查看 Strategy Recommendation
-- 修改 Content Pillar 比例
-- 确认
-- 退回修改
-- 激活 Strategy
-
-确认后：
-
-```text
-ContentPillarsStatus = ACTIVE
-Account.status = ACTIVE
-```
-
-## 验收
-
-未确认 Strategy 的账号：
-
-不得生成正式 Daily Recommendation。
-
----
-
-# 12. Phase 7 - Topic Engine
-
-## 目标
-
-建立选题生成能力。
-
-## Topic 来源
-
-- Account Strategy
-- Content Pillars
-- Historical Performance
-- Strategy Memory
-- Existing Materials
-- Trend
-- Successful Pattern Variants
-- AI Original
-
-## 验收
-
-- 每账号能独立生成 Topic
-- Topic 能追踪来源
-- Topic 能关联 Content Pillar
-- 两个账号选题风格明显不同
-
----
-
-# 13. Phase 8 - TopicScore
-
-## 抖音初始建议
-
-```text
-Strategy Match        25%
-Historical Support    20%
-Material Feasibility  20%
-Interaction Potential 15%
-Freshness             10%
-Series Potential       5%
-Production Cost        5%
-```
-
-## 小红书初始建议
-
-```text
-Audience Demand        25%
-Account Positioning    20%
-Real Experience        20%
-IP / Trust Value       15%
-Historical Support     10%
-Search Value            5%
-Production Cost         5%
-```
-
-## 验收
-
-- 两账号评分逻辑独立
-- Score 可解释
-- Score 不是随机数字
-- 能追踪各维度得分
-
----
-
-# 14. Phase 9 - Daily 3选1
-
-## 目标
-
-每账号每日输出：
-
-- 3 个候选
-- 1 个主推
-
-## 每个候选显示
-
-- Topic
-- TopicScore
-- 推荐原因
-- Content Pillar
-- 目标
-- 制作成本
-- 是否已有素材
-- 是否实验内容
-
-## 验收
-
-- ACTIVE 账号才生成正式推荐
-- 每账号独立 3 选 1
-- 主推有清晰推荐理由
-
----
-
-# 15. Phase 10 - Content Generation
-
-## 抖音
-
-生成：
-
-- Hook
-- 前 3 秒
-- 视频结构
-- 镜头建议
-- 字幕
-- 建议时长
-- 标题
-- BGM 类型
-- 话题
-- 评论互动
-- 发布时间建议
-- 素材建议
-
-## 小红书
-
-生成：
-
-- 标题 × 5
-- 封面文字
-- Hook
-- 正文结构
-- 完整正文
-- 配图结构
-- 截图建议
-- CTA
-- 评论互动
-- 话题
-- 发布时间建议
-
-## 验收
-
-两账号输出模板不能混用。
-
----
-
-# 16. Phase 11 - 素材库
-
-## V1 目标
-
-不做复杂 AI 视频识别。
-
-实现：
-
-- 上传
-- 缩略图
-- 标签
-- 描述
-- AI 辅助摘要
-- Content Pillar 匹配
-- Topic 匹配
-
-## 宠物标签示例
-
-```text
-缅因
-布偶
-双猫
-吃饭
-睡觉
-打闹
-抢位置
-搞笑
-粘人
-反差
-日常
-```
-
-## 验收
-
-- 素材可以关联账号
-- 素材可以关联 Topic
-- Topic Engine 能判断素材可执行性
-
----
-
-# 17. Phase 12 - Content Calendar
-
-## 状态
-
-```text
-IDEA
-SELECTED
-DRAFT
-READY
-PUBLISHED
-REVIEWED
-```
+1. 有历史作品的账号有当前 ACTIVE Baseline 与 CURRENT Diagnosis；无历史数据的小红书账号可按 Profile 起步假设生成 LOW Strategy，无需伪造 Diagnosis/Baseline。
+2. 至少有一条 CURRENT StrategyRecommendation，且依据未过期。
+3. 主要 Pillars 有可读理由，策略明确为第一阶段实验。
+4. 用户明确确认。LOW 不作为阻塞条件。
 
 ## 必须支持
 
-- 计划发布时间
-- 实际发布时间
-- 平台
-- 账号
-- Topic
-- Draft
-- 发布链接
-- Review 状态
+- 查看建议定位、受众假设、分类未知数量、Confidence、Pillar 原因和只读历史数据依据。
+- 编辑推荐定位、Pillar 名称、说明及未来四周的测试资源比例；不得编辑历史数据和证据。
+- 实时合计比例；非 100% 时前端禁用确认，服务端拒绝无效请求。
+- 确认前展示账号、策略版本 V1、测试周期、Pillar 数量/最终比例、Confidence、历史样本数和启用影响。
+- 明确确认后原子创建 ActiveStrategy、ACTIVE ContentPillars、audit event，并将账号状态改为 ACTIVE。保留 Recommendation 原 JSON 和 ID，不覆盖、不改写。
+- ActiveStrategy 至少保存 id/account/source recommendation/version/status/positioning/target audience/content pillars/experiment plan/confirmation confidence/confirmed_at/confirmed_by/created_at/updated_at。
+- 每个 ContentPillar 保存 id、strategy_id、名称、说明、比例、目标、实验问题、证据摘要和 ACTIVE 状态。同一账号最多一个 ACTIVE Strategy。
+- 确认成功显示四周实验计划：缅因高播放是否持续、双猫互动是否持续高于整体、趣味高播放/偏低互动是否稳定（有数据时同时观察涨粉）。不生成具体 Topic。
+- 账号页显示 ACTIVE、Strategy V1、确认时间、四周周期和较低/相应 Confidence；确认后不可原位改比例。
+- `require_active_account` 继续作为正式运营门禁；未确认账号仍被拒绝。XHS 无历史账号允许用户主动确认 Profile 假设作为起步实验策略。
 
 ## 验收
 
-内容生命周期可完整追踪。
+- Python tests 覆盖 LOW 确认、错误比例拒绝、用户修改持久化、Recommendation 不变、ActiveStrategy/Pillars 激活、Account ACTIVE、唯一 ACTIVE、门禁、版本、账号隔离、XHS 无历史、重启持久化及 Phase 5 回归。
+- 真实抖音页面按“查看建议和证据 → 调整（可不改）→ 确认摘要 → 确认并启用”走完；检查 V7 保留、ActiveStrategy V1、三个 Pillars ACTIVE、比例合计 100%、LOW 提示、Account ACTIVE 且未创建 Topic/内容。
+- 更新产品文档、执行计划和 CHANGELOG；Phase 6 验收后停止，不开始 Phase 7。
+
+### Phase 6 真实账号验收结果（2026-10-01）
+
+- 用户在真实 Douyin 页面查看 V7 及只读证据、确认 37/82（45%）主体 UNKNOWN、浏览确认摘要并明确启用。V7 保持 CURRENT，Baseline V4 仍为 82 条历史作品的有效基准。
+- ActiveStrategy V1 状态 ACTIVE，Confidence=LOW，定位“缅因猫与布偶猫的双猫家庭内容方向（初始假设）”。Pillars：日常陪伴 36%、双猫互动 31%、趣味记录 33%；每组均保留历史证据摘要，合计 100%。业务账号状态为 ACTIVE。
+- UI 展示四周验证问题：缅因历史较高播放能否持续；双猫互动能否持续获得高于整体基准的互动率；趣味内容较高播放、偏低互动是否稳定（有数据时观察涨粉）。V7 未被修改，确认及实验计划更正均有审计记录；更正仅修复持久化实验问题与已确认摘要不一致，不改变用户确认的比例或历史证据。
+- 全量 Python tests：438 passed、6 skipped；前端 build 成功；lint 成功并保留两条既有 warning；`git diff --check` 通过。真实 UI 已核对 ACTIVE V1、V7、Pillar、LOW、UNKNOWN 和实验问题。未创建 Topic/内容，Phase 7 不在本轮范围。
 
 ---
 
-# 18. Phase 13 - Published Data
+# 12. R1 交付 Sprint 计划（替代 Phase 7–15 的逐 Phase 排期）
 
-## 目标
+R1 的目标是交付真实账号运营闭环。原 Phase 编号保留为映射/历史语义；开发和验收以 R1 Sprint 为准。
 
-发布后记录真实数据。
+## R1-A — Daily Topic Recommendation（本轮）
 
-## 时间点
+映射原 Phase 7 Topic Engine、Phase 8 TopicScore、Phase 9 Daily 3 选 1。
 
-- 24H
-- 72H
-- 7D
+- 首页第一屏显示“今日运营”，每个 ACTIVE 账号每天保存 3 个候选、1 个主推；未 ACTIVE 的账号明确提示“尚未确认运营策略”，服务端阻止正式候选生成。
+- 读取当前 ActiveStrategy、ACTIVE Content Pillars、四周实验问题、有效 Baseline/Segment、Diagnosis Top/Low、可用 Strategy Memory、Account Profile 和 AI 创意。不依赖实时热点；缺失的 Memory/历史数据使用空值，不编造。
+- 抖音分数固定权重：策略匹配30、历史支持25、实验价值20、执行可行性15、新鲜度10。小红书固定：定位匹配30、受众价值25、真实经历20、IP价值15、可行性10。每个维度保存 0–100 规则分、权重、贡献和理由；Score 不表示成功概率。
+- LLM 只生成标题、角度、可执行说明与轻量材料需求。代码拥有策略绑定、历史指标、实验问题、分项评分、总分和 Pillar 比例。模型失败时允许本地模板降级并明确标记来源。
+- 七天内高度相似的 Topic 降低 Freshness；主推选择兼顾 TopicScore、重复控制和滚动周度 Pillar 资源平衡。换一批保留旧候选为 SKIPPED；选择操作保存 SELECTED 与审计事件。
+- Douyin LOW 不阻止生成，但页面标为实验验证期。XHS 没有 Baseline 时只按已确认定位和真实项目经验假设生成，不显示/生成虚构的历史依据；没有 ActiveStrategy 必须保持门禁。
+- Topic 至少持久化：id、account、strategy、pillar、title、angle、description、score/breakdown、recommendation_reason、historical_evidence、experiment_question、production_difficulty、material_requirements、status、generated_at，以及每日 batch/local_date/generation_mode。
+- 真实验收两账号：抖音需三个可拍候选、一主推和真实 Baseline/Segment 依据；小红书需真实定位/项目经验约束和三选一，不伪造历史数据。无法满足 ACTIVE 条件时验证正确门禁，并由账号负责人先完成策略确认后再执行正式账号验收。
+- 自动测试覆盖 ACTIVE/未 ACTIVE、3 候选/1 主推、固定权重、历史证据/无历史、小红书定位假设、Pillar 分配、七天重复降分、AI 不可用模板兜底、账号隔离、策略版本绑定、选择/换批和数据库重启持久化。
 
-## 指标
+## R1-B — Content Generation（已实现）
 
-按平台支持情况记录：
+映射原 Phase 10。只从用户明确选择的 Topic 进入内容草稿；未选择的候选或主推不得绕过用户进入生成。抖音生成脚本/镜头/字幕/标题等结构化短视频方案；XHS 生成 5 个标题、封面文字、结构、完整正文和配图/截图建议等结构化图文方案。草稿按平台分型并绑定 account、ActiveStrategy 版本和 Topic；重新生成保留版本，人工修改留审计记录。模型输出格式不全、包含虚构个人经历/量化保证或不安全宠物拍摄建议时，不保存；结构错误允许一次有界修复。页面提供审核与编辑；用户负责核实素材、拍摄与人工发布。
 
-- views
-- likes
-- comments
-- favorites
-- shares
-- followersGain
-- profileVisits
-- inquiries
+- 复用 Easel `ConfiguredAIService`、R1-A 当前 Dashboard 与已选 Topic；新增草稿服务、SQLite 持久化和 `/api/operator/accounts/{account_id}/topics/{topic_id}/content-draft` 读写入口。
+- 账号需 ACTIVE；Topic 必须为同账号当前 ACTIVE Strategy 下明确 `SELECTED` 状态。策略变更后旧 Topic 不得继续生成内容。
+- 不自动发布、不创建日历/发布记录/表现指标，不在此 Sprint 建素材库，不进入 R1-C/R1-D。
+- 自动验证双平台字段结构、生成仅基于选中 Topic、账号隔离、策略绑定、版本与持久化、编辑审计、AI 失败和事实/安全边界；真实验收由用户选择 Topic 后完成真实模型生成与 UI 检查。
 
-## 验收
+## R1-C — Content Calendar + Published Data（已实现）
 
-- 数据归属正确
-- 同一 Post 支持多个 checkpoint
-- Weekly Review 能读取
+合并原 Phase 12 与 Phase 13。用户可把当前已选择的 Topic/草稿放入账号隔离的月历，修改计划时间、标记待发布、取消及登记实际发布。发布记录与账号、策略版本和 Topic 绑定，并直接成为 R1-D 复盘数据源；24H/72H/7D 指标录入由 R1-D 管理。日历状态变化保留审计。不得调用自动发布、点赞、评论、关注、私信或平台发布 API。
 
----
+## R1-D — Weekly Review + Strategy Feedback Loop（已实现）
 
-# 19. Phase 14 - Weekly Review
+合并原 Phase 14 与 Phase 15。Weekly Review 只能读取已记录的真实发布/指标并对照 Baseline；经用户审核确认后写入可追溯 Strategy Memory。下一轮 Topic 显示 Memory 如何影响推荐，不直接改写历史或用户确认的 Strategy。工程验收通过不代表已有真实运营样本；当账号尚未发布并补录数据时，真实复盘、Memory 审核和下一轮 Topic 联动仍待实际数据到来，不得使用测试样本冒充账号事实。
 
-## 输出
+### R1-C / R1-D 工程验收记录（2026-10-01）
 
-- 本周内容数量
-- 与 Baseline 对比
-- Content Pillar 表现
-- Topic 表现
-- Hook 表现
-- 时长表现
-- 发布时间表现
-- REAL / AI 表现
-- 高表现共性
-- 低表现共性
-- 下周建议
+- SQLite schema 已升至 `user_version=16`。当前抖音宠物账号与小红书开发者账号的日历排期、发布记录、表现指标、Weekly Review 和 Strategy Memory 均为 0；真实账号没有写入合成发布或表现数据。
+- 本机 `http://127.0.0.1:7873/` 已重启并真实打开“运营日历”与“周复盘”。日历显示当前账号、已选 Topic、月份网格和 0 条计划；周复盘显示 Baseline V4、0 条实际发布并禁用空数据复盘。
+- 全量 Python tests：464 passed、6 skipped；前端 build 通过（主 chunk 超过 500 kB 有 Vite 提示）；lint 通过，有两条既有 warning；`git diff --check` 通过。
+- 真实发布后的 24H/72H/7D 复盘、Memory 人工确认和后续 Topic 联动仍需真实运营数据；这属于运营样本验证，不代表 R1-C/R1-D 工程未完成。
 
-## 验收
+## R1-RC — Release Candidate Integration & Acceptance（已完成集成验收）
 
-Review 必须基于真实数据，不得只生成通用鸡汤式建议。
+本 Sprint 只做现有链路集成、阻塞修复、真实账号 UI 冒烟和发布准备，不新增产品范围。禁止自动发布、AI 视频理解、素材库、新平台、SaaS、多用户、支付、OpenAPI、浏览器采集和 V1.1 能力。
 
----
+- 首页第一屏为“今日运营”，展示账号、当前策略、每日三选一、所选内容草稿入口、本周真实发布执行占比和当天日历计划状态。周度实际进度只读真实 PublishedPost，不得将生成/选择的 Topic 数当成发布量；其它 Easel 工作区收起到次级区域。
+- 已选 Topic 的草稿页提供明确的“采用这个方案，安排发布时间”入口。日历计划绑定账号、策略、方向、Topic 和草稿；计划时间属于计划事实。只有用户登记真实发布时才生成 PublishedPost、实际时间、链接或平台作品 ID。
+- 24H/72H/7D 未到时间时，界面显示“等待数据”，不写 0。真实发布记录可保存平台作品 ID；按账号去重，缺失 ID 保持 NULL。
+- 周复盘只在当周至少 3 条真实发布作品已有实际指标时生成；否则显示“当前发布样本不足，暂无法形成有效周复盘。”统计数字由代码计算；现有 AIService 仅解释已计算的汇总事实，失败时保留确定性说明，不改变统计值。Memory 保持用户确认门槛。
+- R1 集成测试以隔离 SQLite 和 mock AI 穿过 Account/Strategy→Topics→选择→草稿→Calendar→发布 fixture→Metrics→Review→用户接受经验→下一批选题。测试 fixture 不进入真实账号库。
+- 真实抖音验收复用已存在的今日 AI Topic、用户已选择 Topic 和草稿，不生成重复候选；到日历计划阶段，不登记虚假发布。小红书无历史账号走定位实验模式，页面明确无历史表现数据。
+- 对照 `docs/releases/R1_RELEASE_CHECKLIST.md` 分别记录代码验收与真实运营状态。版本准备 R1 / V1.0.0-rc1；Checklist 未全部满足前不得标记 V1.0.0。
+- Vite 主 bundle >500 kB 和两条既有 lint warning 不做大规模重构，记录为 V1.1 技术债。
 
-# 20. Phase 15 - Strategy Feedback Loop
+## 延期至 V1.1
 
-## 目标
-
-形成完整闭环：
-
-```text
-Published Data
-  ↓
-Weekly Review
-  ↓
-Strategy Memory
-  ↓
-Topic Engine
-  ↓
-新的 Daily Recommendation
-```
-
-## 必须实现
-
-- Weekly Review 写入 Strategy Memory
-- Topic Engine 读取相关 Memory
-- 新选题能反映近期复盘结果
-- 不直接永久覆盖原始历史数据
-
-## 验收
-
-至少能展示一条：
-
-“本周复盘结论如何影响下一轮推荐”
-
-V1 到此才视为真正闭环。
+原 Phase 11 素材库整体延期。R1 仅在 Topic 上显示 `material_requirements`，由用户自行准备素材；不开发上传库、缩略图、AI视频理解、抽帧、复杂素材匹配。
 
 ---
 

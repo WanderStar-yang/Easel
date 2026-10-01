@@ -1,10 +1,10 @@
 # AI Social Operator V1 — Active Implementation Plan
 
-- 状态：Phase 0、Phase 0.5、Phase 1、Phase 2、Phase 3、Phase 3.5、Phase 3.6、Phase 4、Phase 4.5/4.5.1、Phase 5、Phase 5.1、Phase 5.2 已完成；等待 Phase 5.2 验收确认，Phase 6 未开始
+- 状态：Phase 0～6、R1-A～R1-D 工程实现已完成；R1-RC 集成、自动检查和两平台真实 UI 冒烟已完成。真实发布及平台表现闭环仍待账号实际运营数据，不得伪造。
 - 更新日期：2026-10-01
 - 源码基线：Easel `main` at `0cab7ca6f6e8286635d25fe2435dda11a975ffec`
 - 本计划依据：`../../AGENTS.md`、`../product-specs/AI_SOCIAL_OPERATOR_V1.md`、`PLANS.md`、`../audits/EASEL_V1_SOURCE_AUDIT.md` 及当前仓库源码
-- 本轮边界：只执行 Phase 5.2 Subject Evidence Completion；不开始 Phase 6 Strategy Confirmation、Topic Engine、每日 3 选 1 或内容生成
+- 本轮边界：R1-RC 集成、修复、真实账号 UI 验收和发布候选准备已完成；不自动发布、不增加范围外能力、不开始后续 Phase。
 
 ## 1. 文档与路径核对
 
@@ -449,3 +449,123 @@ Phase 11 提前只表示素材元数据/账号隔离和 UI 在选题工作流之
 - 真实 UI 检查了 82 条账号样本、主体覆盖提示、37 条未确认过滤、AI suggestions 未自动确认、Baseline V4 Overall/segments、策略 Pillar 证据与比例、双猫低播放/高互动解释及 LOW 证据提示。未开始 Strategy Confirmation、Phase 6、Topic Engine、每日 3 选 1 或内容生成。
 - 全量 `.venv/bin/python -m pytest -q`：427 passed、6 skipped、1 条既有 Starlette/httpx deprecation warning。Phase 5.2 定向分类/策略测试 29 passed；前端 `npm run build`、`npm run lint` 已通过（lint 保留两条既有 warning）；最终 `git diff --check` 通过。
 - Phase 5.2 工程与真实页面流程已完成，但主体证据充分性 Gate 未通过。当前不具备进入 Phase 6 的真实证据条件；停在本阶段，等待用户验收确认。
+
+### Phase 6 进入规则修订（用户验收授权，2026-10-01）
+
+- 用户确认 Phase 5.2 验收通过，并基于真实复核指出剩余 37 条 subjects UNKNOWN 的原因是历史文字字段缺乏主体证据；继续强制 AI 分类或要求逐条重看视频收益不足。
+- 用户明确修订 Phase 6 进入条件：Strategy Confidence=LOW 本身不阻止确认。LOW 在此表示第一阶段实验策略需后续以真实运营数据继续验证。Baseline 有效、至少一条 CURRENT Recommendation、主要 Pillar 有可解释依据、策略明确为实验方案且用户明确确认，才允许激活。
+- 抖音真实账号确认依据：82 条有效作品；Baseline V4；Strategy V7 CURRENT、LOW；主体 UNKNOWN 37/82（45.1%）；缅因/布偶/双猫组 n=17/17/10；建议比例日常陪伴36%、双猫互动31%、趣味记录33%。
+
+## 21. Phase 6 执行计划：Strategy Confirmation
+
+### 代码路径与复用
+
+- 复用 `operator_accounts` 生命周期、`OperatorAccountService.require_active_account` 门禁、`strategy_recommendations` 历史版本、SQLite 仓储、FastAPI 账号路由与现有策略建议面板。
+- 不覆盖 Recommendation JSON；新增 ActiveStrategy、ACTIVE ContentPillar 和确认审计事件的 SQLite 数据结构与账户隔离 API。用户调整仅可写未来定位、Pillar 名称/说明/分配比例。
+- UI 流程：查看 V7 和只读证据 → 编辑未来策略 → 显示实时总比例 → 确认摘要 → 用户主动确认并启用 → 显示 ActiveStrategy 与 4 周实验问题。
+- 确认事务要求：当前有效 Recommendation；有历史作品时 Baseline ACTIVE、Diagnosis CURRENT；无历史例外只允许小红书 Profile 起步实验。服务端再次验证比例合计100%，确认后将账户设 ACTIVE、所有 Pillars 设 ACTIVE，并记录 audit event。
+- LOW 可以确认，但保留 37/82 UNKNOWN 数量与第一阶段测试说明。Confirmation 页面不编辑 Baseline/历史样本。成功页不触发 Topic API，不生成选题、素材推荐、日历/发布计划或内容。
+
+### 验证方案
+
+- Python 测试：LOW 确认、非100%拒绝、比例/名字/说明调整、Recommendation 保持不变、ActiveStrategy V1、Pillars ACTIVE、Account ACTIVE 与 `require_active_account`、重复确认拦截、账号隔离、XHS无历史、过期推荐/Baseline/Diagnosis拒绝、审计和重启持久化、Phase 5 回归。
+- 前端 build/lint，完整 Python tests 与 `git diff --check`。
+- 本机真实 UI：对抖音账号 V7 查看数据依据和 UNKNOWN 提示；保持36/31/33比例；打开摘要并明确确认；验证 Recommendation V7 历史、ActiveStrategy V1、账号状态和 Pillars 均 ACTIVE，且无 Phase7 输出。
+- 完成后更新产品规格、计划与 CHANGELOG；Phase 6 完成后停下等待确认。
+
+## 22. Phase 6 执行结果：Strategy Confirmation
+
+- 工作区进入 Phase 6 前先创建 Phase 5.2 checkpoint：`6f6ce87 Checkpoint social operator Phase 5.2 subject evidence completion`。本轮 Phase 6 修改未混入 checkpoint，也未提交或推送。
+- 真实 Douyin 宠物账号在本地 UI 完成“查看 V7 与证据 → 编辑/检查策略 → 确认摘要 → 确认并启用”。用户保留推荐定位及 36%/31%/33% 比例；确认摘要呈现 82 条有效历史作品、LOW 和策略为第一阶段实验。
+- 数据库验证：账号 `douyin-pet` 为 ACTIVE；Baseline V4 仍 ACTIVE；Recommendation V7（`e1ad4895-aa5b-41f4-8006-365597e8f2bc`）仍 CURRENT 且未改写；ActiveStrategy V1 `active-strategy-b7a32653005540f7a8e436d4b09afecc` 为 ACTIVE，Confidence LOW，绑定来源推荐，确认者 `local_user`，确认时间 `2026-10-01T01:26:33.354885+00:00`。一个确认审计事件记录账号、推荐、策略、时间和比例 `[36,31,33]`；三个 ContentPillar 均 ACTIVE。
+- 用户可读策略：定位“缅因猫与布偶猫的双猫家庭内容方向（初始假设）”；日常陪伴 36%（缅因 n=17，播放 median 975；另保存单猫日常与情绪/陪伴依据）、双猫互动 31%（n=10，播放 median 508、互动率 2.34%，高于整体 2.02%）、趣味记录 33%（搞笑/趣味 n=26，播放 median 753、互动率 1.56%）。这些是描述性差异，不作因果结论。
+- 页面显示 subjects UNKNOWN 37/82（45%）、Confidence LOW、未来四周实验说明。持久化实验问题已通过带审计记录的修正与用户确认摘要保持一致：缅因较高播放是否持续；双猫互动能否持续高于整体互动率；趣味内容较高播放/偏低互动是否稳定并观察有数据时的涨粉表现。
+- 验证：全量 Python tests 438 passed、6 skipped；前端 `npm run build` 成功；`npm run lint` 成功，保留两条既有 warning；`git diff --check` 通过。真实页面已核对 ACTIVE V1、V7 保留、比例、证据摘要、UNKNOWN、Confidence 和四周实验问题。未创建 Topic、选题、素材建议、发布计划或内容；Phase 7 未开始。
+- 本轮结束于 Phase 6。Phase 7 不在本轮范围，等待用户后续确认。
+
+## 23. R1-A 执行结果：Daily Topic Recommendation
+
+### 实现范围
+
+- 将原 Phase 7、8、9 合并为 R1-A：首页第一屏为“今日运营”，按 ACTIVE 业务账号显示当天 3 个候选、1 个主推。账号必须有 ACTIVE ActiveStrategy 和至少 3 个 ACTIVE ContentPillar；服务层与 SQLite 写入路径都校验账号、策略和 Pillar 绑定。未确认策略的账号显示门槛说明，不生成正式 Topic。
+- 新增 `operator_topic_batches`、`operator_topics`、`operator_topic_events` 持久化；Topic 记录策略/Pillar 版本、创意字段、解释性评分分项、历史证据、实验问题、制作难度、材料需求、重复相似度和状态；换批保留旧批次并将未选候选标记为 SKIPPED，选择操作写入事件且同一账号本地日期仅能选择一次。
+- `TopicRecommendationService` 复用 Easel 统一 `AIService`。模型只产生创意字段；账户门禁、策略绑定、历史证据、固定权重计分、实验问题、主推选择与重复控制由代码完成。模型失败时使用明确标记的本地模板。TopicScore 是 0–100 规则分，不是成功概率；LOW 策略继续明确显示为实验验证期。
+- 抖音权重固定为：策略匹配30、历史支持25、实验价值20、执行可行性15、新鲜度10；小红书为：定位匹配30、受众价值25、真实经历20、IP价值15、可行性10。七天内相似候选扣减新鲜度，主推优先考虑比例缺口和分数接近度。
+- R1-A 不新增账号策略确认，也不替用户激活 XHS。初次验收时 XHS 仍为 NEW，页面和服务端均正确阻止正式 Topic 生成；用户随后在账号策略确认页面明确确认并启用 XHS Strategy V1，之后才继续正式验收。第一次提交因本地服务未配置允许的端口来源而被 403 拦截；将本地服务按项目现有 `EASEL_PORT` 配置重启后，原确认操作成功，没有关闭来源校验或修改安全逻辑。
+
+### 真实账号验收
+
+- 本地独立验收端口 7873 的真实 Easel 页面已核对：抖音宠物账号日期为 2026-10-01，ACTIVE Strategy V1，LOW 实验提示，82 条有效历史作品，三个 ACTIVE Pillars 与 36%/31%/33% 周度目标；当日 AI 批次已从数据库读取并显示 3 个候选、1 个主推。
+- 当日主推为“当缅因猫尝试进入较小的纸箱时，布偶猫在旁边会有什么反应？”，TopicScore 85，绑定“趣味记录”，引用搞笑/趣味 n=26、播放中位数753、互动率中位数1.56%。日常陪伴备选引用单猫日常 n=22 及主体等证据；双猫互动备选引用双猫 n=10、播放中位数508、互动率2.34%。所有差异均展示为描述性历史，不作因果承诺。
+- Easel `ConfiguredAIService` 的真实运行状态为 AVAILABLE/Qwen；Douyin 与 XHS 的真实调用均得到结构化 AI 选题，批次持久化标记 `generation_mode=AI`。解析兼容 Qwen 将材料清单作为字符串返回的结构；异常仅降级到本地模板，不输出原始模型响应或密钥。
+- XHS 用户确认前，账号页显示 Strategy Recommendation V3（CURRENT、LOW、0 条历史、定位假设和四个 Pillars：30/25/25/20）及 ActiveStrategy V1 确认摘要。用户明确确认并启用后，数据库验证账号 ACTIVE、ActiveStrategy V1 ACTIVE/LOW，四个 Pillars 为项目实战30%、AI实践25%、开发复盘25%、独立开发20%。
+- XHS 第一次 AI 批次含有无依据的第一人称项目经历和量化成效，因此没有作为可用结果保留：该批次标记 SUPERSEDED，三个候选均 SKIPPED。针对这一真实模型输出收紧提示词并增加保守内容校验；如果模型继续编造个人经历/结果，服务改用显式标记的本地模板。之后真实 AI 批次 #2 成为 CURRENT，含 3 个候选、1 个主推，三个标题均为中性问题式表达，不声称账号本人已做过某项目或取得特定结果；每条均提示只能填写真实经历。XHS 无历史作品，因此历史证据为空，没有伪造 Baseline 或历史数据。
+- 两账号当前批次均已持久化并在真实 UI 显示；XHS 日批次 `topic-batch-3ae0a9f5a127408b922f7882b489c219` 的主推是“独立开发小功能时，先写测试用例还是先写业务逻辑更合理？”，分数 74，绑定“开发复盘”；另两条分别绑定“独立开发”（74）与“AI 实践”（71）。
+
+### 验证与阶段停点
+
+- 自动测试覆盖 ACTIVE/未 ACTIVE、三候选一主推、两平台权重、真实/空历史证据、LOW 策略、AI 模板降级、重复降分、换批跳过、单次选择、审计、跨账号隔离、策略版本绑定和重启后批次读取。新增的日常 Topic 测试 fixture 不再导入另一个测试模块，确保全量收集稳定。
+- 全量 `.venv/bin/python -m pytest -q`：448 passed、6 skipped，1 条既有 Starlette/httpx deprecation warning；前端 `npm run build` 成功；`npm run lint` 成功，保留 `linkifyOutputs.ts` 无用转义与 `AccountsPage.tsx` Hook 依赖两条 warning；`git diff --check` 通过。
+- R1-A 的双账号真实流程已完成并通过用户确认。其实现与验收细节见本节前文；当前按用户“继续执行”进入 R1-B。
+
+## 24. R1-B 执行结果：Content Generation
+
+### 实现范围
+
+- 复用 `ConfiguredAIService`、`operator_topics` 已选状态、ACTIVE 账号/策略以及当前 Dashboard“今日运营”；AI 仅为用户已经选择的 Topic 生成草稿，不从推荐主推或未选择候选绕过选择动作。
+- 新增 `operator_content_drafts` 与 `operator_content_draft_events`。草稿保存 account、selected Topic、ActiveStrategy ID/version、平台、AI 生成模式、独立版本、CURRENT/SUPERSEDED 状态、结构化内容和时间；重新生成新增版本并保留旧版本，人工修改保留当前版本并写入 EDITED 审计事件。
+- 新增双平台 `ContentGenerationService` 和 API：读取当前所选 Topic 草稿、生成/重新生成、保存用户编辑。服务端重新校验账号 ACTIVE、Topic 属于该账号且状态 SELECTED、Topic 的策略仍是当前 ACTIVE Strategy；数据库写入再次校验归属和策略版本。
+- 抖音草稿包含主题、推荐理由、内容目标、Hook、前 3 秒、视频结构、镜头、字幕、时长、5 个标题、BGM、话题、评论互动、发布时间建议、待用户核实的已有素材和实验标签。
+- 小红书草稿包含 5 个标题、封面文字、开头 Hook、结构、完整正文、配图结构、截图建议、待核实项目素材、CTA、评论互动、推荐话题、发布时间建议和实验标签。文本字段明确提示不得伪造项目经历；结构化输出不完整时不保存。
+- UI 仅在 Topic 成为 `SELECTED` 后显示“生成内容草稿”，展示按平台组织的草稿，支持编辑标题及核心正文/字幕并保存；重新生成会创建新版本。页面明确“仅供审核和修改，系统不会自动发布”。
+- 对小红书生成输出校验无依据的第一人称经历、具体量化结果；对两平台拦截保证涨粉/爆款/提升等表述。抖音限制宠物拍摄建议不得诱导宠物挤入过小/不安全道具或受困；对模型结构错误提供一次有界重试，重试仍不合格则不保存草稿。
+- R1-B 不接入 Easel 发布 API，不创建日历项、发布时间事件、发布记录或表现数据；不开发素材上传/素材库。
+
+### 验收与待完成项
+
+- 自动测试已覆盖：抖音与小红书字段结构、严格五标题、模型结构错误的一次修复重试、不安全宠物拍摄方式拦截、小红书虚构经历/量化结果拦截、未选 Topic 拒绝、账号隔离、版本保留、编辑审计和重启持久化。
+- 用户在今日运营页面选择了抖音主推 Topic“当缅因猫尝试进入较小的纸箱时，布偶猫在旁边会有什么反应？”。真实运行状态为 `AVAILABLE / qwen`；模型调用通过 Easel `ConfiguredAIService` 成功，生成内容草稿 V3，HTTP 201，绑定当前 ACTIVE Strategy V1 和所选 Topic。首次输出标题候选数量不合格，触发一次修复重试；后续输出含不安全纸箱建议，被提示约束修正后才通过安全校验并保存。
+- 已在本地 SQLite 验证草稿版本 1/2 为 `SUPERSEDED`，版本 3 为 `CURRENT`，事件依次为 `GENERATED`、`REGENERATED`、`REGENERATED`；重启本机服务后真实页面显示 V3、编辑和重新生成入口，明确草稿不会自动发布。脚本中的具体猫咪行为和素材仍需账号负责人按实际拍摄情况核实后修改。
+- 本轮变更新增/调整的自动测试：`.venv/bin/python -m pytest -q tests/test_social_operator_content_generation.py`：9 passed，1 条既有 Starlette/httpx deprecation warning；`git diff --check` 通过。先前 R1-B 全量 Python 455 passed/6 skipped、前端 build/lint 均成功；本轮仅变更生成服务提示/校验和测试，未重跑前端构建。
+- R1-B 真实模型生成与 UI 保存检查已完成。R1-C 内容日历/发布数据与 R1-D Weekly Review 均未开始。
+
+## 25. R1-C / R1-D 执行结果：运营日历与周复盘闭环
+
+### 实现范围
+
+- 新增 account-scoped 运营日历、实际发布登记、指标、周复盘和 Strategy Memory 表。数据库迁移升级到 `user_version=16`；保留计划变更事件、复盘版本、来源数据版本、Baseline 版本、Memory 版本及确认/忽略/替代/失效事件。用户修改记录不覆盖历史复盘。
+- 日历只允许将当前 ACTIVE Strategy 下用户已选择的 Topic（可选绑定当前 CURRENT 草稿）加入计划；支持月视图、调整时间、标记待发布、取消和人工登记已发布。发布登记记录真实发布时间、标题、内容来源及可选作品链接/Hook/时长，并直接接入指标录入。日历状态均有事件审计；旧策略下未发布计划不能继续推进。
+- 24H/72H/7D 可分节点录入播放、互动、涨粉、主页访问和咨询。页面和服务均不调用平台发布接口或执行自动发布。
+- `WeeklyReviewService` 按 Asia/Shanghai 周一至周日筛选实际发布作品；NULL 保持未知，真实 0 保留；分节点统计各指标 median、P25/P75、sample count、coverage，并对照 ACTIVE Baseline。对整体及 Pillar、Topic、内容来源、Hook、时长、发布时间分组给出描述性统计；分别保留每节点结果和每条作品最新可用指标摘要。
+- Strategy Memory 只对 ACTIVE Baseline 下 7D Pillar 组提出候选：至少 3 条作品，播放或互动率中位数相对 Baseline 绝对差异至少 20%。建议先保持 PROPOSED；用户可编辑后确认或忽略。只有 ACTIVE Memory 会进入下一轮 Topic AI 上下文和相应 Pillar 推荐理由；Memory 不改写策略。发布/指标更新会使当前复盘和来源 Memory 失效。
+- 增加“运营日历”和“周复盘”普通用户页面：日历可安排已选 Topic 并登记真实发布；周复盘可选择账号和周、查看 Baseline 状态、从日历或手动入口登记实际作品、录入分节点指标、生成和查看复盘历史、检查/确认/忽略经验，并查看已确认 Memory。未有实际发布时显示明确空状态，禁止生成空复盘。
+
+### 验收和停点
+
+- 自动验证：全量 `.venv/bin/python -m pytest -q` 为 464 passed、6 skipped，1 条既有 Starlette/httpx deprecation warning；前端 `npm run build` 通过（Vite 提示主 bundle 略超 500 kB）；`npm run lint` 通过并保留两条既有 warning；`git diff --check` 通过。
+- 覆盖真实指标和真实 0、缺失值、账号隔离、Baseline 比较、复盘版本、发布/指标更新后 stale、Memory 最小样本与差异门槛、用户确认后下一轮 Topic 读取 Memory、用户忽略、重启持久化，以及 R1-A/R1-B Topic 和草稿回归。
+- 本地 7873 应用已重启并在真实浏览器验收“运营日历”与“周复盘”空状态；当前抖音账号显示 Baseline V4、尚无登记发布作品。日历没有虚构排期，周复盘禁用空数据生成。数据库确认发布作品、指标、复盘、Memory 均为 0 条；本轮没有写入合成账号数据。
+- 工程与空状态真实 UI 验收通过。真实周复盘、Memory 人工确认及后续 Topic 对 Memory 的实际影响，需在账号真实发布并录入平台数据后继续验证；这不影响 R1-C/R1-D 工程实现完成。本轮到此结束，不进入其它阶段。
+
+## 26. R1-RC 执行结果：Release Candidate Integration & Acceptance
+
+### 集成修复
+
+- 首页以“今日运营”为主入口，进度仅按真实登记的 PublishedPost 计算；今日计划读取运营日历。抖音和小红书无历史状态分别按账号数据显示，小红书明确提示当前依据账号定位且无历史表现。
+- 草稿提供直达运营日历的排期入口。日历切换账号时清空上一个账号的 selected-topic ID，避免新账号虽有已选 Topic，表单仍误将“加入日历”禁用。
+- 对兼容模型偶发的空 `comment_interaction` 文本字段补充中性、可编辑的提问句；其它必需字段仍严格校验。真实请求错误在界面保持用户可读，不保存不完整草稿。
+- 侧栏对话连接状态不再把底层 Gateway 术语暴露给普通用户，也避免与已配置的模型 Provider 状态混淆。
+- 添加 82 条历史作品的真实 SQLite v16→v17 迁移验证与 R1 全流程隔离数据库集成测试。数据库预迁移备份在 `backups/social_operator_2026-10-01_r1-rc.sqlite3`；迁移后 `integrity_check=ok`，82 条历史作品保留。
+
+### 真实账号 UI 冒烟
+
+- 抖音：复用现有真实选题与 V3 草稿，将计划加入日历，计划时间为 2026-10-02 20:00（Asia/Shanghai）。
+- 小红书：无历史表现模式下，当前已选择的开发复盘选题通过已配置的 Qwen-compatible AIService 真实生成并保存 V1 草稿；因模型返回空评论互动字段，经中性默认句规范化后通过其余校验。随后将选题及 V1 草稿排入 2026-10-02 20:00（Asia/Shanghai）。正文保留真实项目细节占位提示，未声称用户本人已有相关经历或素材。
+- 两项均为未来运营计划。SQLite 当前发布作品 0、表现指标 0、周复盘 0、Strategy Memory 0；未写入虚构发布或指标。真实模型请求有一次成功响应，但本地助手状态仍为不可用（对今日运营的 AI 生成链路无影响）。
+- `outputs/_social_operator.sqlite3` 当前 `user_version=17`、`integrity_check=ok`，历史作品仍为 82 条。两个账号各有一项 DRAFT 状态的计划；抖音绑定草稿 V3，小红书绑定草稿 V1。
+
+### 验证与发布状态
+
+- 完整 Python 测试为 468 passed、6 skipped；前端 production build 通过（主 bundle 535.01 kB）；lint 通过并保留两条 warning；`git diff --check` 通过。另有既有 Starlette/httpx 弃用提示；这些非阻塞维护项保留在 RC Checklist。
+- 自动发布、人工登记真实发布后指标/复盘/Memory 的闭环没有在验收中伪造；真实账号尚无发布记录，因此这部分运营样本验证仍待账号主人实际发布并录入数据。
+- 本阶段只完成 R1-RC 集成与发布候选检查；不进入 Phase 5 或新增范围。Checklist 可以标注代码和真实 UI 冒烟通过，但不得宣称已有真实发布数据闭环，也不得把 V1.0.0 标为正式发布。

@@ -153,7 +153,7 @@ def _strip_provider_prefix(model: str, provider: str) -> str:
 class ConfiguredAIService:
     """Resolve configured Easel providers centrally, then use the local gateway."""
 
-    def __init__(self, *, env: dict[str, str] | None = None, timeout_seconds: float = 60):
+    def __init__(self, *, env: dict[str, str] | None = None, timeout_seconds: float = 120):
         self.env = _read_env() if env is None else dict(env)
         self.timeout_seconds = timeout_seconds
         self.providers = self._providers()

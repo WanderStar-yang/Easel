@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 from datetime import datetime, timezone
+from uuid import uuid4
 from .canonical import clean_title
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -189,6 +190,268 @@ class OperatorAccountRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_strategy_recommendations_history
                     ON strategy_recommendations(account_id, version DESC);
+                CREATE TABLE IF NOT EXISTS operator_active_strategies (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    source_recommendation_id TEXT NOT NULL REFERENCES strategy_recommendations(id),
+                    version INTEGER NOT NULL CHECK (version >= 1),
+                    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'SUPERSEDED')),
+                    positioning TEXT NOT NULL,
+                    target_audience TEXT NOT NULL,
+                    content_pillars_json TEXT NOT NULL,
+                    experiment_plan_json TEXT NOT NULL,
+                    confidence_at_confirmation TEXT NOT NULL CHECK (confidence_at_confirmation IN ('LOW', 'MEDIUM', 'HIGH')),
+                    confirmed_at TEXT NOT NULL,
+                    confirmed_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(account_id, version)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_active_strategy_one_active
+                    ON operator_active_strategies(account_id) WHERE status = 'ACTIVE';
+                CREATE INDEX IF NOT EXISTS idx_operator_active_strategy_history
+                    ON operator_active_strategies(account_id, version DESC);
+                CREATE TABLE IF NOT EXISTS operator_content_pillars (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    strategy_id TEXT NOT NULL REFERENCES operator_active_strategies(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    allocation_ratio INTEGER NOT NULL CHECK (allocation_ratio BETWEEN 0 AND 100),
+                    goal TEXT NOT NULL,
+                    experiment_question TEXT NOT NULL,
+                    evidence_summary_json TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'SUPERSEDED')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_content_pillars_strategy
+                    ON operator_content_pillars(account_id, strategy_id, status);
+                CREATE TABLE IF NOT EXISTS strategy_confirmation_events (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    recommendation_id TEXT NOT NULL REFERENCES strategy_recommendations(id),
+                    strategy_id TEXT NOT NULL REFERENCES operator_active_strategies(id),
+                    event_type TEXT NOT NULL CHECK (event_type = 'STRATEGY_CONFIRMED'),
+                    confirmed_at TEXT NOT NULL,
+                    pillar_ratios_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_strategy_confirmation_events_account
+                    ON strategy_confirmation_events(account_id, confirmed_at DESC);
+                CREATE TABLE IF NOT EXISTS strategy_active_change_events (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    strategy_id TEXT NOT NULL REFERENCES operator_active_strategies(id),
+                    event_type TEXT NOT NULL CHECK (event_type = 'EXPERIMENT_PLAN_REPAIRED'),
+                    reason TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    details_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS operator_topic_batches (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    strategy_id TEXT NOT NULL REFERENCES operator_active_strategies(id),
+                    local_date TEXT NOT NULL,
+                    batch_number INTEGER NOT NULL CHECK (batch_number >= 1),
+                    generated_at TEXT NOT NULL,
+                    generation_mode TEXT NOT NULL CHECK (generation_mode IN ('AI', 'TEMPLATE')),
+                    status TEXT NOT NULL CHECK (status IN ('CURRENT', 'SUPERSEDED')),
+                    UNIQUE(account_id, local_date, batch_number)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_topic_one_current_batch
+                    ON operator_topic_batches(account_id, local_date) WHERE status = 'CURRENT';
+                CREATE INDEX IF NOT EXISTS idx_operator_topic_batch_history
+                    ON operator_topic_batches(account_id, local_date DESC, batch_number DESC);
+                CREATE TABLE IF NOT EXISTS operator_topics (
+                    id TEXT PRIMARY KEY,
+                    batch_id TEXT NOT NULL REFERENCES operator_topic_batches(id) ON DELETE CASCADE,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    strategy_id TEXT NOT NULL REFERENCES operator_active_strategies(id),
+                    pillar_id TEXT NOT NULL REFERENCES operator_content_pillars(id),
+                    title TEXT NOT NULL,
+                    angle TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
+                    score_breakdown_json TEXT NOT NULL,
+                    recommendation_reason TEXT NOT NULL,
+                    historical_evidence_json TEXT NOT NULL,
+                    experiment_question TEXT NOT NULL,
+                    production_difficulty TEXT NOT NULL CHECK (production_difficulty IN ('EASY', 'MEDIUM', 'HARD')),
+                    material_requirements_json TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('CANDIDATE', 'RECOMMENDED', 'SELECTED', 'REJECTED', 'SKIPPED')),
+                    similarity_score REAL NOT NULL DEFAULT 0 CHECK (similarity_score BETWEEN 0 AND 1),
+                    created_at TEXT NOT NULL,
+                    UNIQUE(batch_id, title)
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_topics_account_status
+                    ON operator_topics(account_id, status, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_operator_topics_pillar_history
+                    ON operator_topics(account_id, pillar_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS operator_topic_events (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    topic_id TEXT REFERENCES operator_topics(id) ON DELETE SET NULL,
+                    batch_id TEXT REFERENCES operator_topic_batches(id) ON DELETE SET NULL,
+                    event_type TEXT NOT NULL CHECK (event_type IN ('TOPIC_SELECTED', 'BATCH_REPLACED')),
+                    occurred_at TEXT NOT NULL,
+                    details_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_topic_events_account
+                    ON operator_topic_events(account_id, occurred_at DESC);
+                CREATE TABLE IF NOT EXISTS operator_content_drafts (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    topic_id TEXT NOT NULL REFERENCES operator_topics(id) ON DELETE CASCADE,
+                    strategy_id TEXT NOT NULL REFERENCES operator_active_strategies(id),
+                    strategy_version INTEGER NOT NULL CHECK (strategy_version >= 1),
+                    version INTEGER NOT NULL CHECK (version >= 1),
+                    platform TEXT NOT NULL CHECK (platform IN ('douyin', 'xiaohongshu')),
+                    generation_mode TEXT NOT NULL CHECK (generation_mode = 'AI'),
+                    status TEXT NOT NULL CHECK (status IN ('CURRENT', 'SUPERSEDED')),
+                    content_json TEXT NOT NULL,
+                    generated_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(topic_id, version)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_content_draft_one_current
+                    ON operator_content_drafts(account_id, topic_id) WHERE status = 'CURRENT';
+                CREATE INDEX IF NOT EXISTS idx_operator_content_drafts_account
+                    ON operator_content_drafts(account_id, generated_at DESC);
+                CREATE TABLE IF NOT EXISTS operator_content_draft_events (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    draft_id TEXT NOT NULL REFERENCES operator_content_drafts(id) ON DELETE CASCADE,
+                    topic_id TEXT NOT NULL REFERENCES operator_topics(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL CHECK (event_type IN ('GENERATED', 'EDITED', 'REGENERATED')),
+                    occurred_at TEXT NOT NULL,
+                    details_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_content_draft_events_account
+                    ON operator_content_draft_events(account_id, occurred_at DESC);
+                CREATE TABLE IF NOT EXISTS operator_published_posts (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    topic_id TEXT REFERENCES operator_topics(id) ON DELETE SET NULL,
+                    draft_id TEXT REFERENCES operator_content_drafts(id) ON DELETE SET NULL,
+                    strategy_id TEXT NOT NULL REFERENCES operator_active_strategies(id),
+                    strategy_version INTEGER NOT NULL CHECK (strategy_version >= 1),
+                    platform TEXT NOT NULL CHECK (platform IN ('douyin', 'xiaohongshu')),
+                    platform_post_id TEXT,
+                    title TEXT NOT NULL,
+                    published_url TEXT,
+                    published_at TEXT NOT NULL,
+                    content_source TEXT NOT NULL CHECK (content_source IN ('REAL', 'AI', 'MIXED', 'UNKNOWN')),
+                    hook_type TEXT,
+                    duration_seconds INTEGER CHECK (duration_seconds IS NULL OR duration_seconds > 0),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(id, account_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_published_posts_account_time
+                    ON operator_published_posts(account_id, published_at DESC);
+                CREATE TABLE IF NOT EXISTS operator_post_metrics (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    published_post_id TEXT NOT NULL,
+                    checkpoint TEXT NOT NULL CHECK (checkpoint IN ('24H', '72H', '7D')),
+                    views INTEGER CHECK (views IS NULL OR views >= 0),
+                    likes INTEGER CHECK (likes IS NULL OR likes >= 0),
+                    comments INTEGER CHECK (comments IS NULL OR comments >= 0),
+                    favorites INTEGER CHECK (favorites IS NULL OR favorites >= 0),
+                    shares INTEGER CHECK (shares IS NULL OR shares >= 0),
+                    followers_gain INTEGER,
+                    profile_visits INTEGER CHECK (profile_visits IS NULL OR profile_visits >= 0),
+                    inquiries INTEGER CHECK (inquiries IS NULL OR inquiries >= 0),
+                    recorded_at TEXT NOT NULL,
+                    UNIQUE(published_post_id, checkpoint),
+                    FOREIGN KEY(published_post_id, account_id)
+                        REFERENCES operator_published_posts(id, account_id) ON DELETE CASCADE,
+                    CHECK (views IS NOT NULL OR likes IS NOT NULL OR comments IS NOT NULL OR favorites IS NOT NULL
+                           OR shares IS NOT NULL OR followers_gain IS NOT NULL OR profile_visits IS NOT NULL
+                           OR inquiries IS NOT NULL)
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_post_metrics_account_post
+                    ON operator_post_metrics(account_id, published_post_id, checkpoint);
+                CREATE TABLE IF NOT EXISTS operator_weekly_reviews (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    version INTEGER NOT NULL CHECK (version >= 1),
+                    week_start TEXT NOT NULL,
+                    week_end TEXT NOT NULL,
+                    baseline_id TEXT REFERENCES account_baselines(id),
+                    baseline_version INTEGER,
+                    source_data_version TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('CURRENT', 'STALE', 'SUPERSEDED')),
+                    generated_at TEXT NOT NULL,
+                    report_json TEXT NOT NULL,
+                    UNIQUE(account_id, week_start, version)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_weekly_review_one_current
+                    ON operator_weekly_reviews(account_id, week_start) WHERE status = 'CURRENT';
+                CREATE INDEX IF NOT EXISTS idx_operator_weekly_reviews_history
+                    ON operator_weekly_reviews(account_id, week_start DESC, version DESC);
+                CREATE TABLE IF NOT EXISTS operator_strategy_memories (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    review_id TEXT NOT NULL REFERENCES operator_weekly_reviews(id),
+                    memory_key TEXT NOT NULL,
+                    version INTEGER NOT NULL CHECK (version >= 1),
+                    status TEXT NOT NULL CHECK (status IN ('PROPOSED', 'ACTIVE', 'SUPERSEDED', 'DISMISSED', 'STALE')),
+                    statement TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    confirmed_at TEXT,
+                    confirmed_by TEXT,
+                    UNIQUE(account_id, memory_key, version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_strategy_memories_active
+                    ON operator_strategy_memories(account_id, status, created_at DESC);
+                CREATE TABLE IF NOT EXISTS operator_strategy_memory_events (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    memory_id TEXT NOT NULL REFERENCES operator_strategy_memories(id),
+                    review_id TEXT NOT NULL REFERENCES operator_weekly_reviews(id),
+                    event_type TEXT NOT NULL CHECK (event_type IN ('CONFIRMED', 'DISMISSED', 'SUPERSEDED', 'STALE')),
+                    occurred_at TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    details_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_memory_events_account
+                    ON operator_strategy_memory_events(account_id, occurred_at DESC);
+                CREATE TABLE IF NOT EXISTS operator_content_calendar (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    topic_id TEXT NOT NULL REFERENCES operator_topics(id),
+                    draft_id TEXT REFERENCES operator_content_drafts(id) ON DELETE SET NULL,
+                    strategy_id TEXT NOT NULL REFERENCES operator_active_strategies(id),
+                    strategy_version INTEGER NOT NULL CHECK (strategy_version >= 1),
+                    platform TEXT NOT NULL CHECK (platform IN ('douyin', 'xiaohongshu')),
+                    status TEXT NOT NULL CHECK (status IN ('SELECTED', 'DRAFT', 'READY', 'PUBLISHED', 'REVIEWED', 'CANCELLED')),
+                    planned_publish_at TEXT NOT NULL,
+                    actual_publish_at TEXT,
+                    published_url TEXT,
+                    published_post_id TEXT REFERENCES operator_published_posts(id) ON DELETE SET NULL,
+                    review_id TEXT REFERENCES operator_weekly_reviews(id) ON DELETE SET NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_calendar_active_topic
+                    ON operator_content_calendar(account_id, topic_id) WHERE status != 'CANCELLED';
+                CREATE INDEX IF NOT EXISTS idx_operator_calendar_account_date
+                    ON operator_content_calendar(account_id, planned_publish_at, status);
+                CREATE INDEX IF NOT EXISTS idx_operator_calendar_published_post
+                    ON operator_content_calendar(account_id, published_post_id);
+                CREATE TABLE IF NOT EXISTS operator_content_calendar_events (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
+                    calendar_item_id TEXT NOT NULL REFERENCES operator_content_calendar(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL CHECK (event_type IN ('SCHEDULED', 'RESCHEDULED', 'READY', 'CANCELLED', 'PUBLISHED', 'REVIEWED', 'REVIEW_INVALIDATED')),
+                    occurred_at TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    details_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_calendar_events_account
+                    ON operator_content_calendar_events(account_id, occurred_at DESC);
                 CREATE TABLE IF NOT EXISTS historical_post_classification_metadata (
                     account_id TEXT NOT NULL REFERENCES operator_accounts(id) ON DELETE CASCADE,
                     post_id TEXT NOT NULL REFERENCES historical_posts(id) ON DELETE CASCADE,
@@ -299,7 +562,15 @@ class OperatorAccountRepository:
                     conn.execute("UPDATE historical_post_classification_metadata SET value_json = ? "
                                  "WHERE account_id = ? AND post_id = ? AND field = ?",
                                  (json.dumps(value, ensure_ascii=False), row["account_id"], row["post_id"], row["field"]))
-            conn.execute("PRAGMA user_version = 10")
+            published_columns = {row["name"] for row in conn.execute("PRAGMA table_info(operator_published_posts)")}
+            if "platform_post_id" not in published_columns:
+                conn.execute("ALTER TABLE operator_published_posts ADD COLUMN platform_post_id TEXT")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_published_posts_platform_id "
+                "ON operator_published_posts(account_id, platform_post_id) "
+                "WHERE platform_post_id IS NOT NULL AND platform_post_id != ''"
+            )
+            conn.execute("PRAGMA user_version = 17")
 
     def seed_defaults(self, now: str) -> None:
         seeds = (
@@ -333,6 +604,7 @@ class OperatorAccountRepository:
     @staticmethod
     def _account(row: sqlite3.Row) -> dict[str, Any]:
         profile, strategy = row["profile"], row["strategy"]
+        active_strategy = row["active_strategy"]
         return {
             "id": row["id"], "name": row["name"], "platform": row["platform"],
             "status": row["status"], "created_at": row["created_at"],
@@ -340,6 +612,7 @@ class OperatorAccountRepository:
             "diagnosis_completed_at": row["diagnosis_completed_at"],
             "profile": json.loads(profile) if profile else None,
             "strategy": json.loads(strategy) if strategy else None,
+            "active_strategy": json.loads(active_strategy) if active_strategy else None,
         }
 
     def _select(self, conn: sqlite3.Connection, account_id: str | None = None):
@@ -352,7 +625,12 @@ class OperatorAccountRepository:
                     FROM operator_profiles p WHERE p.account_id = a.id) AS profile,
                 (SELECT json_object('id', s.id, 'account_id', s.account_id, 'summary', s.summary,
                     'state', s.state, 'confirmed_at', s.confirmed_at)
-                    FROM operator_strategies s WHERE s.account_id = a.id) AS strategy
+                    FROM operator_strategies s WHERE s.account_id = a.id) AS strategy,
+                (SELECT json_object('id', active.id, 'version', active.version, 'status', active.status,
+                    'confirmedAt', active.confirmed_at,
+                    'confidenceAtConfirmation', active.confidence_at_confirmation)
+                    FROM operator_active_strategies active
+                    WHERE active.account_id = a.id AND active.status = 'ACTIVE') AS active_strategy
                 FROM operator_accounts a {where} ORDER BY a.created_at, a.id""",
             params,
         )
@@ -1107,3 +1385,514 @@ class OperatorAccountRepository:
         with self._connect() as conn:
             conn.execute("UPDATE strategy_recommendations SET status = 'STALE' "
                          "WHERE id = ? AND status = 'CURRENT'", (recommendation_id,))
+
+    @staticmethod
+    def _active_strategy(row: sqlite3.Row, pillars: list[sqlite3.Row]) -> dict[str, Any]:
+        result = dict(row)
+        result["content_pillars"] = json.loads(result.pop("content_pillars_json"))
+        result["experiment_plan"] = json.loads(result.pop("experiment_plan_json"))
+        result["pillars"] = []
+        for pillar in pillars:
+            item = dict(pillar)
+            item["evidence_summary"] = json.loads(item.pop("evidence_summary_json"))
+            result["pillars"].append(item)
+        return result
+
+    def confirm_strategy(self, account_id: str, recommendation_id: str, *, positioning: str,
+                         target_audience: str, pillars: list[dict[str, Any]],
+                         experiment_plan: dict[str, Any], confidence: str,
+                         confirmed_by: str, now: str) -> dict[str, Any]:
+        """Atomically preserve a recommendation and activate a user-confirmed strategy."""
+        strategy_id = f"active-strategy-{uuid4().hex}"
+        pillar_ids = [f"pillar-{uuid4().hex}" for _ in pillars]
+        audit_id = f"strategy-confirmation-{uuid4().hex}"
+        with self._connect() as conn:
+            account = conn.execute(
+                "SELECT a.*, s.state AS strategy_state FROM operator_accounts a "
+                "JOIN operator_strategies s ON s.account_id = a.id WHERE a.id = ?",
+                (account_id,),
+            ).fetchone()
+            if account is None:
+                raise AccountNotFoundError(account_id)
+            if account["status"] == "ACTIVE":
+                raise ValueError("该账号已经启用策略；请创建新版本后再调整。")
+            if account["status"] not in {"NEW", "DIAGNOSING", "STRATEGY_PENDING_CONFIRMATION"}:
+                raise ValueError("当前账号状态不允许确认策略。")
+
+            recommendation_row = conn.execute(
+                "SELECT * FROM strategy_recommendations WHERE id = ? AND account_id = ?",
+                (recommendation_id, account_id),
+            ).fetchone()
+            if recommendation_row is None:
+                raise ValueError("策略建议不存在或不属于当前账号。")
+            latest = conn.execute(
+                "SELECT id, status FROM strategy_recommendations WHERE account_id = ? "
+                "ORDER BY version DESC LIMIT 1", (account_id,),
+            ).fetchone()
+            if (recommendation_row["status"] != "CURRENT" or latest is None
+                    or latest["id"] != recommendation_id or latest["status"] != "CURRENT"):
+                raise ValueError("策略建议已过期，请重新查看最新建议。")
+            recommendation = json.loads(recommendation_row["recommendation_json"])
+            sample_size = int((recommendation.get("source") or {}).get("canonical_sample_size") or 0)
+            baseline_id = recommendation_row["baseline_id"]
+            diagnosis_id = recommendation_row["diagnosis_id"]
+            if sample_size > 0:
+                if not baseline_id or not diagnosis_id or not account["diagnosis_completed_at"]:
+                    raise ValueError("有历史作品的账号需要有效 Baseline 和完成的 Diagnosis 才能确认。")
+                baseline = conn.execute(
+                    "SELECT status FROM account_baselines WHERE id = ? AND account_id = ?",
+                    (baseline_id, account_id),
+                ).fetchone()
+                diagnosis = conn.execute(
+                    "SELECT status FROM account_diagnoses WHERE id = ? AND account_id = ?",
+                    (diagnosis_id, account_id),
+                ).fetchone()
+                if baseline is None or baseline["status"] != "ACTIVE":
+                    raise ValueError("历史基准已过期，请先更新 Baseline。")
+                if diagnosis is None or diagnosis["status"] != "CURRENT":
+                    raise ValueError("账号诊断已过期，请先重新诊断。")
+            else:
+                historical_rows = conn.execute(
+                    "SELECT COUNT(*) AS count FROM historical_posts WHERE account_id = ?", (account_id,),
+                ).fetchone()["count"]
+                if (account["platform"] != "xiaohongshu" or baseline_id is not None
+                        or historical_rows != 0):
+                    raise ValueError("只有没有历史数据的小红书账号可以使用起步实验策略确认。")
+
+            active = conn.execute(
+                "SELECT 1 FROM operator_active_strategies WHERE account_id = ? AND status = 'ACTIVE'",
+                (account_id,),
+            ).fetchone()
+            if active:
+                raise ValueError("该账号已经存在 ACTIVE Strategy。")
+            version = int(conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS next_version "
+                "FROM operator_active_strategies WHERE account_id = ?", (account_id,),
+            ).fetchone()["next_version"])
+            pillar_snapshot = []
+            for pillar_id, pillar in zip(pillar_ids, pillars):
+                pillar_snapshot.append({
+                    "id": pillar_id, "name": pillar["name"], "description": pillar["description"],
+                    "allocation_ratio": pillar["allocation_ratio"], "goal": pillar["goal"],
+                    "experiment_question": pillar["experiment_question"],
+                    "evidence_summary": pillar["evidence_summary"], "status": "ACTIVE",
+                })
+            conn.execute(
+                "UPDATE operator_active_strategies SET status = 'SUPERSEDED', updated_at = ? "
+                "WHERE account_id = ? AND status = 'ACTIVE'", (now, account_id),
+            )
+            conn.execute(
+                "UPDATE operator_content_pillars SET status = 'SUPERSEDED', updated_at = ? "
+                "WHERE account_id = ? AND status = 'ACTIVE'", (now, account_id),
+            )
+            conn.execute(
+                "INSERT INTO operator_active_strategies "
+                "(id, account_id, source_recommendation_id, version, status, positioning, target_audience, "
+                "content_pillars_json, experiment_plan_json, confidence_at_confirmation, confirmed_at, "
+                "confirmed_by, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (strategy_id, account_id, recommendation_id, version, positioning, target_audience,
+                 json.dumps(pillar_snapshot, ensure_ascii=False, allow_nan=False),
+                 json.dumps(experiment_plan, ensure_ascii=False, allow_nan=False), confidence, now,
+                 confirmed_by, now, now),
+            )
+            for pillar_id, pillar in zip(pillar_ids, pillars):
+                conn.execute(
+                    "INSERT INTO operator_content_pillars "
+                    "(id, account_id, strategy_id, name, description, allocation_ratio, goal, "
+                    "experiment_question, evidence_summary_json, status, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)",
+                    (pillar_id, account_id, strategy_id, pillar["name"], pillar["description"],
+                     pillar["allocation_ratio"], pillar["goal"], pillar["experiment_question"],
+                     json.dumps(pillar["evidence_summary"], ensure_ascii=False, allow_nan=False), now, now),
+                )
+            conn.execute(
+                "INSERT INTO strategy_confirmation_events "
+                "(id, account_id, recommendation_id, strategy_id, event_type, confirmed_at, pillar_ratios_json) "
+                "VALUES (?, ?, ?, ?, 'STRATEGY_CONFIRMED', ?, ?)",
+                (audit_id, account_id, recommendation_id, strategy_id, now,
+                 json.dumps([p["allocation_ratio"] for p in pillars], ensure_ascii=False)),
+            )
+            conn.execute(
+                "UPDATE operator_strategies SET summary = ?, state = 'confirmed', confirmed_at = ? "
+                "WHERE account_id = ?", (positioning, now, account_id),
+            )
+            conn.execute(
+                "UPDATE operator_accounts SET status = 'STRATEGY_PENDING_CONFIRMATION', updated_at = ? "
+                "WHERE id = ?", (now, account_id),
+            )
+            conn.execute(
+                "UPDATE operator_accounts SET status = 'ACTIVE', updated_at = ? WHERE id = ?",
+                (now, account_id),
+            )
+            row = conn.execute("SELECT * FROM operator_active_strategies WHERE id = ?", (strategy_id,)).fetchone()
+            saved_pillars = conn.execute(
+                "SELECT * FROM operator_content_pillars WHERE strategy_id = ? ORDER BY rowid", (strategy_id,),
+            ).fetchall()
+        return self._active_strategy(row, saved_pillars)
+
+    def get_active_strategy(self, account_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM operator_active_strategies WHERE account_id = ? AND status = 'ACTIVE'",
+                (account_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            pillars = conn.execute(
+                "SELECT * FROM operator_content_pillars WHERE account_id = ? AND strategy_id = ? "
+                "AND status = 'ACTIVE' ORDER BY rowid", (account_id, row["id"]),
+            ).fetchall()
+        return self._active_strategy(row, pillars)
+
+    def repair_active_strategy_experiment_plan(self, account_id: str, strategy_id: str, *,
+                                               experiment_plan: dict[str, Any], reason: str,
+                                               occurred_at: str) -> dict[str, Any]:
+        """Audited correction for a persisted plan that differed from its confirmed UI summary."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT experiment_plan_json FROM operator_active_strategies "
+                "WHERE account_id = ? AND id = ? AND status = 'ACTIVE'", (account_id, strategy_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("ACTIVE Strategy 不存在或不属于当前账号。")
+            previous = json.loads(row["experiment_plan_json"])
+            conn.execute(
+                "UPDATE operator_active_strategies SET experiment_plan_json = ?, updated_at = ? "
+                "WHERE account_id = ? AND id = ? AND status = 'ACTIVE'",
+                (json.dumps(experiment_plan, ensure_ascii=False, allow_nan=False), occurred_at,
+                 account_id, strategy_id),
+            )
+            conn.execute(
+                "INSERT INTO strategy_active_change_events "
+                "(id, account_id, strategy_id, event_type, reason, occurred_at, details_json) "
+                "VALUES (?, ?, ?, 'EXPERIMENT_PLAN_REPAIRED', ?, ?, ?)",
+                (f"strategy-plan-repair-{uuid4().hex}", account_id, strategy_id, reason, occurred_at,
+                 json.dumps({"previous": previous, "corrected": experiment_plan}, ensure_ascii=False,
+                            allow_nan=False)),
+            )
+            updated = conn.execute("SELECT * FROM operator_active_strategies WHERE id = ?", (strategy_id,)).fetchone()
+            pillars = conn.execute(
+                "SELECT * FROM operator_content_pillars WHERE account_id = ? AND strategy_id = ? "
+                "AND status = 'ACTIVE' ORDER BY rowid", (account_id, strategy_id),
+            ).fetchall()
+        return self._active_strategy(updated, pillars)
+
+    @staticmethod
+    def _topic(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["score_breakdown"] = json.loads(item.pop("score_breakdown_json"))
+        item["historical_evidence"] = json.loads(item.pop("historical_evidence_json"))
+        item["material_requirements"] = json.loads(item.pop("material_requirements_json"))
+        return item
+
+    @classmethod
+    def _topic_batch(cls, row: sqlite3.Row, topics: list[sqlite3.Row]) -> dict[str, Any]:
+        batch = dict(row)
+        batch["topics"] = [cls._topic(topic) for topic in topics]
+        return batch
+
+    def get_daily_topic_batch(self, account_id: str, local_date: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            batch = conn.execute(
+                "SELECT * FROM operator_topic_batches WHERE account_id = ? AND local_date = ? "
+                "AND status = 'CURRENT'", (account_id, local_date),
+            ).fetchone()
+            if batch is None:
+                return None
+            topics = conn.execute(
+                "SELECT t.*, p.name AS pillar_name FROM operator_topics t "
+                "JOIN operator_content_pillars p ON p.id = t.pillar_id "
+                "WHERE t.account_id = ? AND t.batch_id = ? "
+                "ORDER BY CASE t.status WHEN 'RECOMMENDED' THEN 0 ELSE 1 END, t.score DESC, t.created_at",
+                (account_id, batch["id"]),
+            ).fetchall()
+        return self._topic_batch(batch, topics)
+
+    def list_recent_topics(self, account_id: str, since_date: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT t.id, t.batch_id, t.pillar_id, t.title, t.status, t.score, t.created_at, "
+                "b.local_date FROM operator_topics t JOIN operator_topic_batches b ON b.id = t.batch_id "
+                "WHERE t.account_id = ? AND b.local_date >= ? ORDER BY b.local_date DESC, t.created_at DESC LIMIT ?",
+                (account_id, since_date, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_daily_topic_batch(self, account_id: str, *, strategy_id: str, batch_id: str,
+                               local_date: str, generated_at: str, generation_mode: str,
+                               topics: list[dict[str, Any]]) -> dict[str, Any]:
+        if len(topics) != 3 or sum(item.get("status") == "RECOMMENDED" for item in topics) != 1:
+            raise ValueError("每日选题批次必须包含 3 个候选和 1 个主推。")
+        if generation_mode not in {"AI", "TEMPLATE"}:
+            raise ValueError("不支持的选题生成方式。")
+        with self._connect() as conn:
+            account = conn.execute("SELECT status FROM operator_accounts WHERE id = ?", (account_id,)).fetchone()
+            if account is None:
+                raise AccountNotFoundError(account_id)
+            if account["status"] != "ACTIVE":
+                raise ValueError("尚未确认运营策略，不能生成正式选题。")
+            active = conn.execute(
+                "SELECT id FROM operator_active_strategies WHERE account_id = ? AND status = 'ACTIVE'",
+                (account_id,),
+            ).fetchone()
+            if active is None or active["id"] != strategy_id:
+                raise ValueError("当前 ACTIVE Strategy 已变化，请刷新后重新生成。")
+            active_pillars = {row["id"] for row in conn.execute(
+                "SELECT id FROM operator_content_pillars WHERE account_id = ? AND strategy_id = ? "
+                "AND status = 'ACTIVE'", (account_id, strategy_id),
+            ).fetchall()}
+            if any(item.get("pillar_id") not in active_pillars for item in topics):
+                raise ValueError("选题只能关联当前账号策略中的 ACTIVE Content Pillar。")
+            selected = conn.execute(
+                "SELECT 1 FROM operator_topics t JOIN operator_topic_batches b ON b.id = t.batch_id "
+                "WHERE t.account_id = ? AND b.local_date = ? AND t.status = 'SELECTED' LIMIT 1",
+                (account_id, local_date),
+            ).fetchone()
+            if selected:
+                raise ValueError("今天已经选择了一个选题，不能再换一批。")
+            previous = conn.execute(
+                "SELECT id FROM operator_topic_batches WHERE account_id = ? AND local_date = ? "
+                "AND status = 'CURRENT'", (account_id, local_date),
+            ).fetchone()
+            next_number = int(conn.execute(
+                "SELECT COALESCE(MAX(batch_number), 0) + 1 FROM operator_topic_batches "
+                "WHERE account_id = ? AND local_date = ?", (account_id, local_date),
+            ).fetchone()[0])
+            if previous:
+                skipped = [row["id"] for row in conn.execute(
+                    "SELECT id FROM operator_topics WHERE account_id = ? AND batch_id = ? "
+                    "AND status IN ('CANDIDATE', 'RECOMMENDED')", (account_id, previous["id"]),
+                ).fetchall()]
+                conn.execute(
+                    "UPDATE operator_topics SET status = 'SKIPPED' WHERE account_id = ? AND batch_id = ? "
+                    "AND status IN ('CANDIDATE', 'RECOMMENDED')", (account_id, previous["id"]),
+                )
+                conn.execute("UPDATE operator_topic_batches SET status = 'SUPERSEDED' WHERE id = ?",
+                             (previous["id"],))
+                conn.execute(
+                    "INSERT INTO operator_topic_events "
+                    "(id, account_id, batch_id, event_type, occurred_at, details_json) "
+                    "VALUES (?, ?, ?, 'BATCH_REPLACED', ?, ?)",
+                    (f"topic-event-{uuid4().hex}", account_id, previous["id"], generated_at,
+                     json.dumps({"skipped_topic_ids": skipped}, ensure_ascii=False)),
+                )
+            conn.execute(
+                "INSERT INTO operator_topic_batches "
+                "(id, account_id, strategy_id, local_date, batch_number, generated_at, generation_mode, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'CURRENT')",
+                (batch_id, account_id, strategy_id, local_date, next_number, generated_at, generation_mode),
+            )
+            for item in topics:
+                if item.get("strategy_id") != strategy_id or item.get("account_id") != account_id:
+                    raise ValueError("选题账号或策略版本不匹配。")
+                conn.execute(
+                    "INSERT INTO operator_topics "
+                    "(id, batch_id, account_id, strategy_id, pillar_id, title, angle, description, score, "
+                    "score_breakdown_json, recommendation_reason, historical_evidence_json, experiment_question, "
+                    "production_difficulty, material_requirements_json, status, similarity_score, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (item["id"], batch_id, account_id, strategy_id, item["pillar_id"], item["title"],
+                     item["angle"], item["description"], item["score"],
+                     json.dumps(item["score_breakdown"], ensure_ascii=False, allow_nan=False),
+                     item["recommendation_reason"],
+                     json.dumps(item["historical_evidence"], ensure_ascii=False, allow_nan=False),
+                     item["experiment_question"], item["production_difficulty"],
+                     json.dumps(item["material_requirements"], ensure_ascii=False, allow_nan=False),
+                     item["status"], item["similarity_score"], generated_at),
+                )
+            rows = conn.execute("SELECT t.*, p.name AS pillar_name FROM operator_topics t "
+                                "JOIN operator_content_pillars p ON p.id = t.pillar_id "
+                                "WHERE t.account_id = ? AND t.batch_id = ? "
+                                "ORDER BY CASE t.status WHEN 'RECOMMENDED' THEN 0 ELSE 1 END, t.score DESC",
+                                (account_id, batch_id)).fetchall()
+            batch = conn.execute("SELECT * FROM operator_topic_batches WHERE id = ?", (batch_id,)).fetchone()
+        return self._topic_batch(batch, rows)
+
+    def select_daily_topic(self, account_id: str, topic_id: str, *, local_date: str,
+                           occurred_at: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            account = conn.execute("SELECT status FROM operator_accounts WHERE id = ?", (account_id,)).fetchone()
+            if account is None:
+                raise AccountNotFoundError(account_id)
+            if account["status"] != "ACTIVE":
+                raise ValueError("尚未确认运营策略，不能选择正式选题。")
+            row = conn.execute(
+                "SELECT t.*, b.strategy_id, b.local_date, b.status AS batch_status "
+                "FROM operator_topics t JOIN operator_topic_batches b ON b.id = t.batch_id "
+                "WHERE t.account_id = ? AND t.id = ? AND b.local_date = ? AND b.status = 'CURRENT'",
+                (account_id, topic_id, local_date),
+            ).fetchone()
+            if row is None:
+                raise ValueError("选题不存在、已过期或不属于当前账号。")
+            active = conn.execute(
+                "SELECT id FROM operator_active_strategies WHERE account_id = ? AND status = 'ACTIVE'",
+                (account_id,),
+            ).fetchone()
+            if active is None or row["strategy_id"] != active["id"]:
+                raise ValueError("该选题关联的策略已不再 ACTIVE。")
+            already_selected = conn.execute(
+                "SELECT 1 FROM operator_topics t JOIN operator_topic_batches b ON b.id = t.batch_id "
+                "WHERE t.account_id = ? AND b.local_date = ? AND t.status = 'SELECTED' LIMIT 1",
+                (account_id, local_date),
+            ).fetchone()
+            if already_selected:
+                raise ValueError("今天已经选择了一个选题。")
+            if row["status"] == "SELECTED":
+                raise ValueError("这个选题已经选中。")
+            if row["status"] not in {"CANDIDATE", "RECOMMENDED"}:
+                raise ValueError("该候选已被跳过或拒绝，不能选择。")
+            conn.execute(
+                "UPDATE operator_topics SET status = CASE WHEN id = ? THEN 'SELECTED' ELSE 'SKIPPED' END "
+                "WHERE account_id = ? AND batch_id = ? AND status IN ('CANDIDATE', 'RECOMMENDED')",
+                (topic_id, account_id, row["batch_id"]),
+            )
+            conn.execute(
+                "INSERT INTO operator_topic_events "
+                "(id, account_id, topic_id, batch_id, event_type, occurred_at, details_json) "
+                "VALUES (?, ?, ?, ?, 'TOPIC_SELECTED', ?, ?)",
+                (f"topic-event-{uuid4().hex}", account_id, topic_id, row["batch_id"], occurred_at,
+                 json.dumps({"pillar_id": row["pillar_id"], "score": row["score"]}, ensure_ascii=False)),
+            )
+            topics = conn.execute("SELECT t.*, p.name AS pillar_name FROM operator_topics t "
+                                  "JOIN operator_content_pillars p ON p.id = t.pillar_id "
+                                  "WHERE t.account_id = ? AND t.batch_id = ? "
+                                  "ORDER BY CASE t.status WHEN 'SELECTED' THEN 0 WHEN 'RECOMMENDED' THEN 1 ELSE 2 END, t.score DESC",
+                                  (account_id, row["batch_id"])).fetchall()
+            batch = conn.execute("SELECT * FROM operator_topic_batches WHERE id = ?", (row["batch_id"],)).fetchone()
+        return self._topic_batch(batch, topics)
+
+    @staticmethod
+    def _content_draft(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["content"] = json.loads(item.pop("content_json"))
+        return item
+
+    def get_selected_topic_for_draft(self, account_id: str, topic_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            account = conn.execute(
+                "SELECT id, name, platform, status FROM operator_accounts WHERE id = ?", (account_id,),
+            ).fetchone()
+            if account is None:
+                raise AccountNotFoundError(account_id)
+            if account["status"] != "ACTIVE":
+                raise ValueError("账号策略尚未确认，不能生成正式内容草稿。")
+            active = conn.execute(
+                "SELECT * FROM operator_active_strategies WHERE account_id = ? AND status = 'ACTIVE'",
+                (account_id,),
+            ).fetchone()
+            if active is None:
+                raise ValueError("账号没有 ACTIVE Strategy，不能生成正式内容草稿。")
+            row = conn.execute(
+                "SELECT t.*, p.name AS pillar_name, p.description AS pillar_description, p.goal AS pillar_goal, "
+                "b.generated_at AS topic_generated_at, "
+                "b.local_date AS topic_date FROM operator_topics t "
+                "JOIN operator_topic_batches b ON b.id = t.batch_id "
+                "JOIN operator_content_pillars p ON p.id = t.pillar_id "
+                "WHERE t.account_id = ? AND t.id = ? AND t.status = 'SELECTED' "
+                "AND t.strategy_id = ? AND b.strategy_id = ?",
+                (account_id, topic_id, active["id"], active["id"]),
+            ).fetchone()
+            if row is None:
+                raise ValueError("请先在今日运营中选择此账号当前策略下的选题。")
+            strategy = dict(active)
+            strategy["content_pillars"] = json.loads(strategy.pop("content_pillars_json"))
+            strategy["experiment_plan"] = json.loads(strategy.pop("experiment_plan_json"))
+            topic = self._topic(row)
+            topic["topic_generated_at"] = topic.pop("topic_generated_at")
+            topic["topic_date"] = topic.pop("topic_date")
+        return {"account": dict(account), "strategy": strategy, "topic": topic}
+
+    def get_content_draft(self, account_id: str, topic_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM operator_content_drafts WHERE account_id = ? AND topic_id = ? "
+                "AND status = 'CURRENT'", (account_id, topic_id),
+            ).fetchone()
+        return self._content_draft(row) if row else None
+
+    def save_content_draft(self, account_id: str, topic_id: str, *, draft_id: str,
+                           strategy_id: str, strategy_version: int, platform: str,
+                           content: dict[str, Any], occurred_at: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            account = conn.execute(
+                "SELECT status, platform FROM operator_accounts WHERE id = ?", (account_id,),
+            ).fetchone()
+            if account is None:
+                raise AccountNotFoundError(account_id)
+            if account["status"] != "ACTIVE":
+                raise ValueError("账号策略尚未确认，不能生成正式内容草稿。")
+            active = conn.execute(
+                "SELECT id, version FROM operator_active_strategies WHERE account_id = ? AND status = 'ACTIVE'",
+                (account_id,),
+            ).fetchone()
+            if active is None or active["id"] != strategy_id or active["version"] != strategy_version:
+                raise ValueError("当前 ACTIVE Strategy 已变化，请刷新选题后重试。")
+            selected = conn.execute(
+                "SELECT 1 FROM operator_topics WHERE account_id = ? AND id = ? AND strategy_id = ? "
+                "AND status = 'SELECTED'", (account_id, topic_id, strategy_id),
+            ).fetchone()
+            if selected is None:
+                raise ValueError("只有用户已选择的选题才能生成内容草稿。")
+            if account["platform"] != platform:
+                raise ValueError("草稿平台必须与业务账号平台一致。")
+            previous = conn.execute(
+                "SELECT id, version FROM operator_content_drafts WHERE account_id = ? AND topic_id = ? "
+                "AND status = 'CURRENT'", (account_id, topic_id),
+            ).fetchone()
+            version = int(previous["version"]) + 1 if previous else 1
+            if previous:
+                conn.execute("UPDATE operator_content_drafts SET status = 'SUPERSEDED' WHERE id = ?",
+                             (previous["id"],))
+            conn.execute(
+                "INSERT INTO operator_content_drafts "
+                "(id, account_id, topic_id, strategy_id, strategy_version, version, platform, "
+                "generation_mode, status, content_json, generated_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'AI', 'CURRENT', ?, ?, ?)",
+                (draft_id, account_id, topic_id, strategy_id, strategy_version, version, platform,
+                 json.dumps(content, ensure_ascii=False, allow_nan=False), occurred_at, occurred_at),
+            )
+            conn.execute(
+                "INSERT INTO operator_content_draft_events "
+                "(id, account_id, draft_id, topic_id, event_type, occurred_at, details_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (f"content-draft-event-{uuid4().hex}", account_id, draft_id, topic_id,
+                 "REGENERATED" if previous else "GENERATED", occurred_at,
+                 json.dumps({"version": version, "strategy_version": strategy_version}, ensure_ascii=False)),
+            )
+            saved = conn.execute("SELECT * FROM operator_content_drafts WHERE id = ?", (draft_id,)).fetchone()
+        return self._content_draft(saved)
+
+    def update_content_draft(self, account_id: str, topic_id: str, content: dict[str, Any], *,
+                             occurred_at: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            account = conn.execute(
+                "SELECT status FROM operator_accounts WHERE id = ?", (account_id,),
+            ).fetchone()
+            if account is None:
+                raise AccountNotFoundError(account_id)
+            if account["status"] != "ACTIVE":
+                raise ValueError("账号策略尚未确认，不能编辑正式内容草稿。")
+            row = conn.execute(
+                "SELECT d.* FROM operator_content_drafts d "
+                "JOIN operator_active_strategies s ON s.id = d.strategy_id AND s.status = 'ACTIVE' "
+                "JOIN operator_topics t ON t.id = d.topic_id AND t.status = 'SELECTED' "
+                "WHERE d.account_id = ? AND d.topic_id = ? AND d.status = 'CURRENT' "
+                "AND d.strategy_id = s.id",
+                (account_id, topic_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("当前选题没有可编辑的草稿，或其策略已不再 ACTIVE。")
+            conn.execute(
+                "UPDATE operator_content_drafts SET content_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(content, ensure_ascii=False, allow_nan=False), occurred_at, row["id"]),
+            )
+            conn.execute(
+                "INSERT INTO operator_content_draft_events "
+                "(id, account_id, draft_id, topic_id, event_type, occurred_at, details_json) "
+                "VALUES (?, ?, ?, ?, 'EDITED', ?, ?)",
+                (f"content-draft-event-{uuid4().hex}", account_id, row["id"], topic_id, occurred_at,
+                 json.dumps({"version": row["version"]}, ensure_ascii=False)),
+            )
+            updated = conn.execute("SELECT * FROM operator_content_drafts WHERE id = ?", (row["id"],)).fetchone()
+        return self._content_draft(updated)

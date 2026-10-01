@@ -12,6 +12,8 @@ import CalendarPage from './components/CalendarPage';
 import IdeasPage from './components/IdeasPage';
 import PublishPage from './components/PublishPage';
 import BreakdownPage from './components/BreakdownPage';
+import WeeklyReviewPage from './components/WeeklyReviewPage';
+import OperatorCalendarPage from './components/OperatorCalendarPage';
 import SubNav from './components/SubNav';
 import OnboardingWizard from './components/OnboardingWizard';
 import SettingsPanel from './components/SettingsPanel';
@@ -737,6 +739,10 @@ export default function App() {
         return <AccountsPage onOpenSettings={() => setSettingsOpen(true)} />;
       case 'profile':
         return <ProfilePage persona={selectedPersona} onNewProfile={() => setShowWizard(true)} onDeleted={handleProfileDeleted} />;
+      case 'weekly-review':
+        return <WeeklyReviewPage />;
+      case 'operator-calendar':
+        return <OperatorCalendarPage />;
       default:
         return null;
     }

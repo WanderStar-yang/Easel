@@ -6,10 +6,11 @@ import {
   IconChat, IconSkills, IconOutputs, IconAccounts, IconProfile,
   IconNewChat, IconEdit, IconArchive, IconUnarchive, IconTrash, IconChevron,
   IconDashboard,
+  IconChart,
 } from './icons';
 import { IconGear } from './settingsIcons';
 
-export type Page = 'dashboard' | 'chat' | 'trends' | 'ideas' | 'calendar' | 'publish' | 'breakdown' | 'skills' | 'outputs' | 'accounts' | 'profile';
+export type Page = 'dashboard' | 'chat' | 'trends' | 'ideas' | 'calendar' | 'publish' | 'breakdown' | 'skills' | 'outputs' | 'accounts' | 'profile' | 'operator-calendar' | 'weekly-review';
 
 interface SidebarProps {
   currentPage: Page;
@@ -32,11 +33,13 @@ interface SidebarProps {
 
 // 主导航（精简）；热点雷达/选题库/内容日历/发布中心 收进「工作台」，不占侧栏
 const NAV: { page: Page; Icon: ComponentType<{ size?: number }>; label: string }[] = [
-  { page: 'dashboard', Icon: IconDashboard, label: '工作台' },
+  { page: 'dashboard', Icon: IconDashboard, label: '今日运营' },
   { page: 'chat', Icon: IconChat, label: '对话' },
   { page: 'skills', Icon: IconSkills, label: '技能库' },
   { page: 'outputs', Icon: IconOutputs, label: '内容库' },
   { page: 'accounts', Icon: IconAccounts, label: '账号' },
+  { page: 'operator-calendar', Icon: IconDashboard, label: '运营日历' },
+  { page: 'weekly-review', Icon: IconChart, label: '周复盘' },
   { page: 'profile', Icon: IconProfile, label: '画像' },
 ];
 
@@ -172,9 +175,9 @@ export default function Sidebar({
       <div className="sidebar-status">
         <span className={`status-dot ${gatewayStatus === 'connected' ? '' : 'offline'}`} />
         {gatewayStatus === 'connected'
-          ? '网关已连接'
+          ? '对话服务已连接'
           : gatewayStatus === 'disconnected'
-            ? '网关离线'
+            ? '对话服务暂不可用'
             : '连接中…'}
         <button className="settings-gear" onClick={onOpenSettings} title="设置（模型 · 环境 · 更多）">
           <IconGear size={13} /> 设置

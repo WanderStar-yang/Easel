@@ -8,6 +8,7 @@ import type {
   AnalyticsPlatform, AccountAnalytics, AccountWhoami,
 } from '../lib/api';
 import type { Page } from './Sidebar';
+import DailyOperationsPanel from './DailyOperationsPanel';
 import { getWhoamiCache, verifyStale } from '../lib/whoami';
 import {
   IconFire, IconCalendar, IconOutputs, IconChat, IconSkills, IconAccounts,
@@ -119,11 +120,22 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
   return (
     <div className="page-scroll dash-page">
       <div className="dash-hero">
-        <h1 className="page-title" style={{ fontSize: 26 }}>{greet} 👋</h1>
+        <h1 className="page-title" style={{ fontSize: 26 }}>今日运营</h1>
         <p className="page-subtitle">
-          {gatewayStatus === 'connected' ? '一切就绪。' : '⚠ 网关未连接。'}
-          {persona ? ` 当前画像「${persona}」。` : ' 通用模式——指定画像效果更好。'}
-          从热点到发布，一站式搞定今天的内容。
+          每个已确认策略的账号展示一个主推和两个备选。账号策略置信度较低时，建议仍作为实验继续验证。
+        </p>
+      </div>
+
+      <DailyOperationsPanel onNavigate={onNavigate} />
+
+      <details className="card" style={{ padding: 14 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>展开 Easel 其他工作区</summary>
+
+      <div className="dash-hero" style={{ marginTop: 16 }}>
+        <h2 className="page-title" style={{ fontSize: 20 }}>{greet} 👋</h2>
+        <p className="page-subtitle">
+          {gatewayStatus === 'connected' ? '对话服务已连接。' : '对话服务暂不可用，不影响上方已生成的今日选题。'}
+          {persona ? ` 当前画像「${persona}」。` : ''}
         </p>
         <div className="dash-quick">
           {quick.map((q) => (
@@ -336,6 +348,7 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
           })()}
         </div>
       </div>
+      </details>
     </div>
   );
 }

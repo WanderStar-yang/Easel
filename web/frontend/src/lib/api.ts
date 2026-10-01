@@ -442,6 +442,124 @@ export interface OperatorAccount {
   strategy: { id: string; summary: string; state: string; confirmedAt: string | null };
   createdAt: string;
   updatedAt: string;
+  activeStrategy: { id: string; version: number; status: 'ACTIVE' | 'SUPERSEDED';
+    confirmedAt: string; confidenceAtConfirmation: 'LOW' | 'MEDIUM' | 'HIGH' } | null;
+}
+
+export interface ActiveStrategyPillar {
+  id: string;
+  account_id: string;
+  strategy_id: string;
+  name: string;
+  description: string;
+  allocation_ratio: number;
+  goal: string;
+  experiment_question: string;
+  evidence_summary: Array<Record<string, unknown>>;
+  status: 'ACTIVE' | 'SUPERSEDED';
+}
+
+export interface ActiveStrategy {
+  id: string;
+  account_id: string;
+  source_recommendation_id: string;
+  version: number;
+  status: 'ACTIVE' | 'SUPERSEDED';
+  positioning: string;
+  target_audience: string;
+  content_pillars: Array<Record<string, unknown>>;
+  experiment_plan: { horizon_weeks: number; tests: Array<{ pillar_name: string; question: string }>; note: string };
+  confidence_at_confirmation: 'LOW' | 'MEDIUM' | 'HIGH';
+  confirmed_at: string;
+  confirmed_by: string;
+  created_at: string;
+  updated_at: string;
+  pillars: ActiveStrategyPillar[];
+}
+
+export interface DailyTopic {
+  id: string;
+  batch_id: string;
+  account_id: string;
+  strategy_id: string;
+  pillar_id: string;
+  pillar_name: string;
+  title: string;
+  angle: string;
+  description: string;
+  score: number;
+  score_breakdown: {
+    platform: 'douyin' | 'xiaohongshu';
+    formula_version: string;
+    total: number;
+    weights_total: number;
+    dimensions: Record<string, { weight: number; score: number; contribution: number; reason: string }>;
+    note: string;
+  };
+  recommendation_reason: string;
+  historical_evidence: Array<Record<string, unknown>>;
+  experiment_question: string;
+  production_difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  material_requirements: string[];
+  status: 'CANDIDATE' | 'RECOMMENDED' | 'SELECTED' | 'REJECTED' | 'SKIPPED';
+  similarity_score: number;
+}
+
+export interface DailyTopicBatch {
+  id: string;
+  account_id: string;
+  strategy_id: string;
+  local_date: string;
+  batch_number: number;
+  generated_at: string;
+  generation_mode: 'AI' | 'TEMPLATE';
+  status: 'CURRENT' | 'SUPERSEDED';
+  topics: DailyTopic[];
+}
+
+export interface DailyTopicAccountState {
+  account_id: string;
+  account_name: string;
+  platform: 'douyin' | 'xiaohongshu';
+  account_status: OperatorAccountStatus;
+  local_date: string;
+  can_generate: boolean;
+  gate_reason: string | null;
+  confidence?: 'LOW' | 'MEDIUM' | 'HIGH';
+  strategy_id?: string;
+  strategy_version?: number;
+  strategy_positioning?: string;
+  historical_sample_size?: number | null;
+  baseline_version?: number | null;
+  allocation_plan?: Array<{
+    pillar_id: string; pillar_name: string; target_percent: number;
+    recommendations_last_7_days: number; observed_percent: number | null;
+  }>;
+  generation_mode?: 'AI' | 'TEMPLATE' | null;
+  today: DailyTopicBatch | null;
+}
+
+export interface OperatorContentDraft {
+  id: string;
+  account_id: string;
+  topic_id: string;
+  strategy_id: string;
+  strategy_version: number;
+  version: number;
+  platform: 'douyin' | 'xiaohongshu';
+  generation_mode: 'AI';
+  status: 'CURRENT' | 'SUPERSEDED';
+  content: Record<string, unknown>;
+  generated_at: string;
+  updated_at: string;
+}
+
+export interface ContentDraftContext {
+  account: { id: string; name: string; platform: 'douyin' | 'xiaohongshu'; status: OperatorAccountStatus };
+  strategy: { id: string; version: number; positioning: string; target_audience: string; confidence_at_confirmation: 'LOW' | 'MEDIUM' | 'HIGH' };
+  topic: DailyTopic & { topic_generated_at: string; topic_date: string };
+  draft: OperatorContentDraft | null;
+  provider?: string;
 }
 
 export function fetchOperatorAccounts(): Promise<OperatorAccount[]> {
@@ -877,6 +995,184 @@ export function fetchStrategyRecommendationHistory(accountId: string): Promise<S
 
 export function generateStrategyRecommendation(accountId: string): Promise<StrategyRecommendation> {
   return request<StrategyRecommendation>(`/api/operator/accounts/${encodeURIComponent(accountId)}/strategy-recommendations`, { method: 'POST' });
+}
+
+export function fetchActiveStrategy(accountId: string): Promise<ActiveStrategy | null> {
+  return request<ActiveStrategy | null>(`/api/operator/accounts/${encodeURIComponent(accountId)}/active-strategy`);
+}
+
+export function confirmOperatorStrategy(accountId: string, payload: {
+  recommendation_id: string;
+  positioning: string;
+  pillars: Array<{ recommendation_pillar_id: string; name: string; description: string; allocation_ratio: number }>;
+}): Promise<ActiveStrategy> {
+  return request<ActiveStrategy>(`/api/operator/accounts/${encodeURIComponent(accountId)}/strategy-confirmation`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+export function fetchDailyTopics(accountId: string): Promise<DailyTopicAccountState> {
+  return request<DailyTopicAccountState>(`/api/operator/accounts/${encodeURIComponent(accountId)}/daily-topics`);
+}
+
+export function generateDailyTopics(accountId: string): Promise<DailyTopicBatch> {
+  return request<DailyTopicBatch>(`/api/operator/accounts/${encodeURIComponent(accountId)}/daily-topics`, { method: 'POST' });
+}
+
+export function selectDailyTopic(accountId: string, topicId: string): Promise<DailyTopicBatch> {
+  return request<DailyTopicBatch>(`/api/operator/accounts/${encodeURIComponent(accountId)}/daily-topics/${encodeURIComponent(topicId)}/select`, { method: 'POST' });
+}
+
+export function fetchOperatorContentDraft(accountId: string, topicId: string): Promise<ContentDraftContext> {
+  return request<ContentDraftContext>(`/api/operator/accounts/${encodeURIComponent(accountId)}/topics/${encodeURIComponent(topicId)}/content-draft`);
+}
+
+export function generateOperatorContentDraft(accountId: string, topicId: string): Promise<ContentDraftContext> {
+  return request<ContentDraftContext>(`/api/operator/accounts/${encodeURIComponent(accountId)}/topics/${encodeURIComponent(topicId)}/content-draft/generate`, { method: 'POST' });
+}
+
+export function updateOperatorContentDraft(accountId: string, topicId: string, content: Record<string, unknown>): Promise<ContentDraftContext> {
+  return request<ContentDraftContext>(`/api/operator/accounts/${encodeURIComponent(accountId)}/topics/${encodeURIComponent(topicId)}/content-draft`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }),
+  });
+}
+
+export interface FeedbackTopicOption {
+  id: string; title: string; strategy_id: string; pillar_id: string; pillar_name: string;
+  draft_id: string | null; draft_version: number | null;
+}
+
+export interface FeedbackPost {
+  id: string; title: string; published_at: string; published_url: string | null; platform_post_id: string | null;
+  content_source: 'REAL' | 'AI' | 'MIXED' | 'UNKNOWN'; hook_type: string | null;
+  duration_seconds: number | null; topic_id: string | null; pillar_id: string | null;
+  pillar_name: string | null; checkpoint_count: number;
+  metrics: Array<Record<string, string | number | null>>;
+}
+
+export interface FeedbackContext {
+  account: { id: string; name: string; platform: 'douyin' | 'xiaohongshu'; status: string };
+  active_strategy: { id: string; version: number; status: string } | null;
+  baseline: { id: string; version: number; status: string; sample_size: number } | null;
+  selected_topics: FeedbackTopicOption[];
+  published_posts: FeedbackPost[];
+  active_memories: FeedbackMemory[];
+}
+
+export interface OperatorCalendarEvent {
+  event_type: string; occurred_at: string; actor: string; details_json: string;
+}
+
+export interface OperatorCalendarItem {
+  id: string; account_id: string; topic_id: string; draft_id: string | null;
+  strategy_id: string; strategy_version: number; platform: 'douyin' | 'xiaohongshu';
+  status: 'SELECTED' | 'DRAFT' | 'READY' | 'PUBLISHED' | 'REVIEWED' | 'CANCELLED';
+  planned_publish_at: string; actual_publish_at: string | null; published_url: string | null;
+  published_post_id: string | null; review_id: string | null; topic_title: string;
+  pillar_name: string | null; draft_version: number | null; published_title: string | null;
+  strategy_is_current?: boolean;
+  events?: OperatorCalendarEvent[];
+}
+
+export interface OperatorCalendarContext {
+  account: FeedbackContext['account'];
+  active_strategy: FeedbackContext['active_strategy'];
+  selected_topics: FeedbackTopicOption[];
+  calendar_items: OperatorCalendarItem[];
+}
+
+export interface FeedbackMemory {
+  id: string; review_id: string; memory_key: string; version: number;
+  status: 'PROPOSED' | 'ACTIVE' | 'SUPERSEDED' | 'DISMISSED' | 'STALE';
+  statement: string; evidence: Record<string, unknown>; created_at: string;
+  confirmed_at: string | null; confirmed_by: string | null;
+}
+
+export interface WeeklyReview {
+  id: string; account_id: string; version: number; week_start: string; week_end: string;
+  baseline_id: string | null; baseline_version: number | null;
+  source_data_version: string; status: 'CURRENT' | 'STALE' | 'SUPERSEDED';
+  generated_at: string; report: Record<string, unknown>; memories?: FeedbackMemory[];
+}
+
+function operatorFeedbackPath(accountId: string, suffix: string): string {
+  return `/api/operator/accounts/${encodeURIComponent(accountId)}/${suffix}`;
+}
+
+export function fetchFeedbackContext(accountId: string): Promise<FeedbackContext> {
+  return request(operatorFeedbackPath(accountId, 'feedback/context'));
+}
+
+export function fetchOperatorCalendar(accountId: string, start: string, end: string): Promise<OperatorCalendarContext> {
+  const query = new URLSearchParams({ start, end });
+  return request(`/api/operator/accounts/${encodeURIComponent(accountId)}/calendar?${query.toString()}`);
+}
+
+export function scheduleOperatorTopic(accountId: string, payload: {
+  topic_id: string; draft_id: string | null; planned_publish_at: string;
+}): Promise<OperatorCalendarItem> {
+  return request(`/api/operator/accounts/${encodeURIComponent(accountId)}/calendar`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+export function rescheduleOperatorTopic(accountId: string, itemId: string, plannedPublishAt: string): Promise<OperatorCalendarItem> {
+  return request(`/api/operator/accounts/${encodeURIComponent(accountId)}/calendar/${encodeURIComponent(itemId)}/date`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planned_publish_at: plannedPublishAt }),
+  });
+}
+
+export function markOperatorPlanReady(accountId: string, itemId: string): Promise<OperatorCalendarItem> {
+  return request(`/api/operator/accounts/${encodeURIComponent(accountId)}/calendar/${encodeURIComponent(itemId)}/ready`, { method: 'POST' });
+}
+
+export function cancelOperatorPlan(accountId: string, itemId: string): Promise<OperatorCalendarItem> {
+  return request(`/api/operator/accounts/${encodeURIComponent(accountId)}/calendar/${encodeURIComponent(itemId)}/cancel`, { method: 'POST' });
+}
+
+export function markOperatorPlanPublished(accountId: string, itemId: string, payload: Record<string, unknown>): Promise<OperatorCalendarItem> {
+  return request(`/api/operator/accounts/${encodeURIComponent(accountId)}/calendar/${encodeURIComponent(itemId)}/publish`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+export function registerPublishedPost(accountId: string, payload: Record<string, unknown>): Promise<FeedbackPost> {
+  return request(operatorFeedbackPath(accountId, 'published-posts'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+export function savePublishedPostMetrics(accountId: string, postId: string, checkpoint: '24H' | '72H' | '7D',
+  payload: Record<string, number | null>): Promise<Record<string, unknown>> {
+  return request(operatorFeedbackPath(accountId, `published-posts/${encodeURIComponent(postId)}/metrics/${checkpoint}`), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
+export function fetchWeeklyReviews(accountId: string): Promise<WeeklyReview[]> {
+  return request(operatorFeedbackPath(accountId, 'weekly-reviews'));
+}
+
+export function fetchWeeklyReview(accountId: string, reviewId: string): Promise<WeeklyReview> {
+  return request(operatorFeedbackPath(accountId, `weekly-reviews/${encodeURIComponent(reviewId)}`));
+}
+
+export function generateWeeklyReview(accountId: string, weekStart: string): Promise<WeeklyReview> {
+  return request(operatorFeedbackPath(accountId, 'weekly-reviews'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ week_start: weekStart }),
+  });
+}
+
+export function confirmStrategyMemory(accountId: string, memoryId: string, statement?: string): Promise<FeedbackMemory> {
+  return request(operatorFeedbackPath(accountId, `strategy-memories/${encodeURIComponent(memoryId)}/confirm`), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ statement }),
+  });
+}
+
+export function dismissStrategyMemory(accountId: string, memoryId: string): Promise<FeedbackMemory> {
+  return request(operatorFeedbackPath(accountId, `strategy-memories/${encodeURIComponent(memoryId)}/dismiss`), {
+    method: 'POST',
+  });
 }
 
 export interface AccountWhoami {

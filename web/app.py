@@ -31,6 +31,11 @@ from web.routers.historical_posts import router as historical_posts_router
 from web.routers.operator_diagnosis import router as operator_diagnosis_router
 from web.routers.operator_baselines import router as operator_baseline_router
 from web.routers.operator_strategy_recommendations import router as operator_strategy_recommendations_router
+from web.routers.operator_strategy_confirmation import router as operator_strategy_confirmation_router
+from web.routers.operator_daily_topics import router as operator_daily_topics_router
+from web.routers.operator_content_generation import router as operator_content_generation_router
+from web.routers.operator_feedback import router as operator_feedback_router
+from web.routers.operator_calendar import router as operator_calendar_router
 from web.routers.operator_accounts import router as operator_accounts_router
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -435,6 +440,11 @@ app.include_router(historical_posts_router)
 app.include_router(operator_diagnosis_router)
 app.include_router(operator_baseline_router)
 app.include_router(operator_strategy_recommendations_router)
+app.include_router(operator_strategy_confirmation_router)
+app.include_router(operator_daily_topics_router)
+app.include_router(operator_content_generation_router)
+app.include_router(operator_feedback_router)
+app.include_router(operator_calendar_router)
 
 def _local_ports(env_port: str) -> set[str]:
     """本机写守卫放行的端口集合：固定的 7860/7870/5173，加上 `--port`/EASEL_PORT

@@ -78,6 +78,11 @@ export default function AccountsPage({ onOpenSettings }: { onOpenSettings: () =>
     return () => { aliveRef.current = false; };
   }, []);
 
+  const refreshOperatorAccounts = useCallback(() => {
+    fetchOperatorAccounts().then((list) => { setOperatorAccounts(list); setOperatorAccountsErr(''); })
+      .catch(() => setOperatorAccountsErr('加载业务运营账号失败'));
+  }, []);
+
   // 真校验某平台登录态 + 拉昵称/头像（后端起浏览器，数秒）；手动「校验账号」或登录成功后调
   const runWhoami = useCallback((platform: string) => {
     setWhoami((w) => ({ ...w, [platform]: 'loading' }));
@@ -109,11 +114,7 @@ export default function AccountsPage({ onOpenSettings }: { onOpenSettings: () =>
 
   useEffect(() => { load(); }, [load]);
 
-  useEffect(() => {
-    fetchOperatorAccounts()
-      .then(setOperatorAccounts)
-      .catch(() => setOperatorAccountsErr('加载业务运营账号失败'));
-  }, []);
+  useEffect(() => { refreshOperatorAccounts(); }, [refreshOperatorAccounts]);
 
   // 切回本标签页 / 窗口重新获得焦点时自动重拉账号态——登录/退出后即使漏了一次刷新，切回来也是最新的，
   // 用户无需手动刷新页面。（登录中弹着二维码时不打扰，避免打断轮询。）
@@ -314,7 +315,7 @@ export default function AccountsPage({ onOpenSettings }: { onOpenSettings: () =>
       <section style={{ marginTop: 24, marginBottom: 30 }} aria-labelledby="operator-accounts-title">
         <h2 id="operator-accounts-title" style={{ fontSize: 18, margin: '0 0 6px' }}>业务运营账号</h2>
         <p className="page-subtitle" style={{ margin: '0 0 14px' }}>
-          V1 运营对象，与下方的平台登录连接分别管理。初始定位和策略仍是待验证假设。
+          V1 运营对象，与下方的平台登录连接分别管理；未确认账号的定位和策略仍是待验证假设。
         </p>
         {operatorAccountsErr && <div role="alert" style={{ color: 'var(--red)', fontSize: 13 }}>{operatorAccountsErr}</div>}
         <div className="accounts-grid">
@@ -323,7 +324,7 @@ export default function AccountsPage({ onOpenSettings }: { onOpenSettings: () =>
               <div className="account-card-head">
                 <span className="account-card-name">{account.name}</span>
                 <span className={`badge ${account.status === 'ACTIVE' ? 'badge-ok' : ''}`}>
-                  {account.status}
+                  {account.status === 'ACTIVE' ? '已启用' : account.status === 'STRATEGY_PENDING_CONFIRMATION' ? '待确认策略' : account.status === 'DIAGNOSING' ? '诊断中' : account.status === 'NEW' ? '未开始' : account.status}
                 </span>
               </div>
               <div className="account-card-note" style={{ marginTop: 10 }}>
@@ -335,6 +336,9 @@ export default function AccountsPage({ onOpenSettings }: { onOpenSettings: () =>
               <div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 10 }}>
                 <strong>Strategy</strong><br />{account.strategy.summary || '尚未填写'}
               </div>
+              {account.activeStrategy && <div className="page-subtitle" style={{ marginTop: 8 }}>
+                当前策略 V{account.activeStrategy.version} · 启用时间 {new Date(account.activeStrategy.confirmedAt).toLocaleString()} · 测试周期 4 周 · 可信度 {account.activeStrategy.confidenceAtConfirmation === 'LOW' ? '较低' : account.activeStrategy.confidenceAtConfirmation === 'MEDIUM' ? '中等' : '较高'}<br />该策略将在后续真实数据复盘中持续调整。
+              </div>}
               <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
                 <button className="btn btn-sm" style={{ flex: 1 }}
                   onClick={() => { setDiagnosisAccount(null); setHistoryAccount(account); }}>
@@ -375,7 +379,7 @@ export default function AccountsPage({ onOpenSettings }: { onOpenSettings: () =>
         )}
         {strategyAccount && (
           <Suspense fallback={<div className="card" style={{ marginTop: 20, padding: 18 }}>正在加载策略建议…</div>}>
-            <StrategyRecommendationPanel account={strategyAccount} onClose={() => setStrategyAccount(null)} />
+            <StrategyRecommendationPanel account={strategyAccount} onClose={() => setStrategyAccount(null)} onActivated={refreshOperatorAccounts} />
           </Suspense>
         )}
       </section>

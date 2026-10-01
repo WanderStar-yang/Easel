@@ -63,6 +63,7 @@ class OperatorAccount:
     created_at: str
     updated_at: str
     diagnosis_completed_at: str | None
+    active_strategy: dict[str, object] | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -83,6 +84,7 @@ class OperatorAccount:
             },
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
+            "activeStrategy": self.active_strategy,
         }
 
 
